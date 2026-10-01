@@ -1,4 +1,14 @@
-<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#04050c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+</head>
+<body>
 <title>Starlight Voyager</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -32,10 +42,12 @@
 [hidden] { display: none !important; }
 *, *::before, *::after { box-sizing: border-box; }
 html, body { height: 100%; }
-html { overflow: hidden; }
+html { overflow: hidden; touch-action: none; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body { margin: 0; background: var(--void); color: var(--ink); font-family: var(--f-ui); font-size: 15px; overflow: hidden;
   user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; touch-action: none; }
-#game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; background: var(--void); }
+#game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; background: var(--void); touch-action: none; }
+#hud, #touch, #stickzone, #labels, #dmg { touch-action: none; }
+button { touch-action: manipulation; }
 button { font: inherit; color: inherit; }
 button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 .num { font-variant-numeric: tabular-nums; }
@@ -3987,6 +3999,14 @@ const Input = {
     tap('t-swap', () => Player.cycleWeapon(1));
     tap('t-nova', () => Player.useNova());
     window.addEventListener('gamepadconnected', () => { this.pad.on = true; });
+    // iPad/iPhone: stop double-tap-to-zoom and pinch-zoom from resizing the page mid-game.
+    // Menu buttons, links and form controls keep their normal taps; menus still scroll.
+    const keepTap = (t) => t && t.closest && t.closest('a, input, select, label, textarea, button:not(.tb)');
+    document.addEventListener('touchend', (e) => { if (!keepTap(e.target)) e.preventDefault(); }, { passive: false });
+    document.addEventListener('touchstart', (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
+    document.addEventListener('touchmove', (e) => { if (e.touches.length > 1 || (typeof e.scale === 'number' && e.scale !== 1)) e.preventDefault(); }, { passive: false });
+    for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
+    document.addEventListener('dblclick', (e) => e.preventDefault(), { passive: false });
     if (window.matchMedia && matchMedia('(pointer: coarse)').matches && !matchMedia('(pointer: fine)').matches) this.setTouch(true);
   },
   setTouch(v) {
@@ -4505,24 +4525,34 @@ const Player = {
 
 // ───────────────────────────── camera ─────────────────────────────
 const Cam = {
-  pos: new V3(), q: new Quat(), fov: 70 * DEG, shake: 0, rq: new Quat(), extraFov: 0,
+  pos: new V3(), q: new Quat(), fov: 68 * DEG, shake: 0, rq: new Quat(), extraFov: 0,
+  // Chase framing: the ship sits just above the lower third with the aim point clear in the centre,
+  // ~14% of the screen width on a 16:9 display. The camera pulls back further when boosting/cruising.
+  DIST: 20, HEIGHT: 5.0, AIM_AHEAD: 60, AIM_UP: 1.5, BASE_FOV: 68,
+  // narrow (portrait) screens: widen the view and back off so the ship doesn't fill the width
+  aspectK() { const a = R.cssW / Math.max(1, R.cssH); return a >= 1.2 ? 0 : clamp((1.2 - a) / 0.75, 0, 1); },
+  offset(out, back) {
+    const k = this.aspectK();
+    return out.set(0, this.HEIGHT * (1 + 0.25 * k), back * (1 + 0.3 * k));
+  },
+  aimPoint(out) { return out.set(0, this.AIM_UP, -this.AIM_AHEAD).applyQuat(Player.q).add(Player.pos); },
   snap() {
     const P = Player;
-    this.pos.set(0, 3.4, 12.5).applyQuat(P.q).add(P.pos);
-    _v2.set(0, 1.2, -30).applyQuat(P.q).add(P.pos);
+    this.offset(this.pos, this.DIST).applyQuat(P.q).add(P.pos);
+    this.aimPoint(_v2);
     this.q.lookRotation(_v2.sub(this.pos).normalize(), _v3.set(0, 1, 0).applyQuat(P.q));
   },
   update(dt) {
     const P = Player;
-    const back = 12.5 + (P.boosting ? 2.2 : 0) + (P.cruise ? 3.5 : 0);
-    _v1.set(0, 3.4, back).applyQuat(P.q).add(P.pos);
+    const back = this.DIST + (P.boosting ? 3.5 : 0) + (P.cruise ? 6 : 0);
+    this.offset(_v1, back).applyQuat(P.q).add(P.pos);
     this.pos.addScaled(P.vel, dt);
-    this.pos.lerp(_v1, 1 - Math.exp(-7.5 * dt));
-    _v2.set(0, 1.2, -30).applyQuat(P.q).add(P.pos).sub(this.pos).normalize();
+    this.pos.lerp(_v1, 1 - Math.exp(-6.5 * dt));
+    this.aimPoint(_v2).sub(this.pos).normalize();
     _v3.set(0, 1, 0).applyQuat(P.q);
     _q1.lookRotation(_v2, _v3);
-    this.q.slerp(_q1, 1 - Math.exp(-11 * dt));
-    const targetFov = 70 + (P.boosting ? 8 : 0) + (P.cruise ? 16 : 0) + this.extraFov;
+    this.q.slerp(_q1, 1 - Math.exp(-10 * dt));
+    const targetFov = this.BASE_FOV + 14 * this.aspectK() + (P.boosting ? 7 : 0) + (P.cruise ? 14 : 0) + this.extraFov;
     this.fov = damp(this.fov, targetFov * DEG, 3, dt);
     this.shake = Math.max(0, this.shake - dt * 2.2);
     this.rq.copy(this.q);
@@ -4533,6 +4563,7 @@ const Cam = {
     }
   },
 };
+
 
 // ==== 11_enemies.js ====
 // ───────────────────────────── enemies ─────────────────────────────
@@ -6837,4 +6868,5 @@ if (window.claude && window.claude.hot && window.claude.hot.ready) window.claude
 })();
 </script>
 
-</body></html>
+</body>
+</html>

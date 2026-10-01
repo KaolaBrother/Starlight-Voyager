@@ -1,0 +1,548 @@
+<title>Starlight Voyager</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=Michroma&display=swap">
+<style>
+/* Layout: full-bleed WebGL sky; the HUD clings to the four corners inside the safe-area insets; menus are centred instrument panels over a dimmed sky. */
+:root {
+  --void: #04050c;
+  --panel: rgba(8, 11, 24, 0.84);
+  --panel-2: rgba(18, 23, 44, 0.92);
+  --line: rgba(255, 207, 120, 0.24);
+  --line-2: rgba(255, 207, 120, 0.6);
+  --ink: #eef0fb;
+  --ink-dim: #a3aacb;
+  --ink-faint: #6a7194;
+  --gold: #ffcf70;
+  --gold-hot: #fff1cc;
+  --gold-ink: #1b1405;
+  --hull: #5cf2a4;
+  --shield: #66b9ff;
+  --energy: #c493ff;
+  --danger: #ff5a72;
+  --f-display: "Michroma", "Eurostile", "Bank Gothic", "Arial Black", sans-serif;
+  --f-ui: "Chakra Petch", "Rajdhani", "Segoe UI", system-ui, sans-serif;
+  --sa-t: env(safe-area-inset-top, 0px);
+  --sa-r: env(safe-area-inset-right, 0px);
+  --sa-b: env(safe-area-inset-bottom, 0px);
+  --sa-l: env(safe-area-inset-left, 0px);
+  color-scheme: dark;
+}
+[hidden] { display: none !important; }
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; }
+html { overflow: hidden; touch-action: none; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { margin: 0; background: var(--void); color: var(--ink); font-family: var(--f-ui); font-size: 15px; overflow: hidden;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; touch-action: none; }
+#game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; background: var(--void); touch-action: none; }
+#hud, #touch, #stickzone, #labels, #dmg { touch-action: none; }
+button { touch-action: manipulation; }
+button { font: inherit; color: inherit; }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.num { font-variant-numeric: tabular-nums; }
+.lbl { font-family: var(--f-display); font-size: 8.5px; letter-spacing: 0.2em; color: var(--ink-dim); text-transform: uppercase; }
+
+/* ─── HUD ─── */
+#hud { position: fixed; inset: 0; pointer-events: none; }
+#hud-tl, #hud-tc, #hud-bc, .speed, .lock span { text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95), 0 0 10px rgba(0, 0, 0, 0.6); }
+#hud-tl { position: absolute; left: calc(16px + var(--sa-l)); top: calc(14px + var(--sa-t)); display: grid; gap: 6px; width: 236px; }
+.pilot-row { display: flex; align-items: center; gap: 10px; }
+.lvl { display: flex; align-items: baseline; gap: 4px; }
+.lvl .num { font-family: var(--f-display); font-size: 17px; color: var(--gold); }
+.xpbar { flex: 1; height: 3px; background: rgba(255, 207, 112, 0.14); position: relative; }
+.xpbar i { position: absolute; inset: 0 auto 0 0; width: 0%; background: var(--gold); box-shadow: 0 0 8px var(--gold); }
+.credits { display: flex; align-items: center; gap: 5px; font-weight: 600; font-size: 14px; color: var(--gold-hot); }
+.gem { width: 9px; height: 9px; background: #7fe6ff; transform: rotate(45deg); box-shadow: 0 0 8px #7fe6ff; }
+.gauge { display: grid; grid-template-columns: 46px 1fr 44px; align-items: center; gap: 8px; }
+.gauge .bar { height: 7px; background: rgba(255, 255, 255, 0.07); position: relative; overflow: hidden; clip-path: polygon(0 0, 100% 0, calc(100% - 5px) 100%, 0 100%); }
+.gauge .bar i { position: absolute; inset: 0 auto 0 0; width: 100%; transition: width 0.12s linear; }
+.gauge .bar::after { content: ""; position: absolute; inset: 0; background: repeating-linear-gradient(90deg, transparent 0 9px, rgba(4, 5, 12, 0.7) 9px 10px); }
+.gauge .num { font-size: 12px; text-align: right; color: var(--ink); }
+.g-hull .bar i { background: var(--hull); box-shadow: 0 0 10px var(--hull); }
+.g-shield .bar i { background: var(--shield); box-shadow: 0 0 10px var(--shield); }
+.g-energy .bar i { background: var(--energy); box-shadow: 0 0 10px var(--energy); }
+.g-hull.low .bar i { background: var(--danger); animation: blink 0.6s steps(2) infinite; }
+@keyframes blink { 50% { opacity: 0.35; } }
+.buffs { display: flex; flex-wrap: wrap; gap: 5px; }
+.buff { font-size: 11px; font-weight: 600; padding: 2px 7px; border: 1px solid currentColor; letter-spacing: 0.04em; }
+
+#hud-tc { position: absolute; top: calc(12px + var(--sa-t)); left: 50%; transform: translateX(-50%); display: grid; justify-items: center; gap: 4px; width: min(46vw, 460px); text-align: center; }
+#h-loc { display: flex; align-items: center; gap: 10px; }
+.sys { font-family: var(--f-display); font-size: 11px; letter-spacing: 0.32em; text-transform: uppercase; }
+.danger { display: flex; gap: 3px; }
+.danger i { width: 5px; height: 5px; background: rgba(255, 255, 255, 0.18); transform: rotate(45deg); }
+.danger i.on { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
+.obj { font-size: 12.5px; color: var(--ink-dim); text-wrap: balance; }
+.obj b { color: var(--gold-hot); font-weight: 600; }
+.boss { width: 100%; display: grid; gap: 4px; margin-top: 4px; }
+.boss-name { font-family: var(--f-display); font-size: 10px; letter-spacing: 0.3em; color: var(--danger); text-transform: uppercase; }
+.boss .bar { height: 6px; background: rgba(255, 90, 114, 0.15); border: 1px solid rgba(255, 90, 114, 0.5); }
+.boss .bar i { display: block; height: 100%; width: 100%; background: linear-gradient(90deg, #ff3355, #ff9a5c); box-shadow: 0 0 12px #ff3355; transition: width 0.15s; }
+
+#hud-tr { position: absolute; right: calc(14px + var(--sa-r)); top: calc(12px + var(--sa-t)); display: grid; justify-items: end; gap: 8px; }
+#radar { width: 150px; height: 150px; display: block; }
+.hud-btns { display: flex; gap: 6px; pointer-events: auto; }
+.hbtn { min-width: 44px; height: 32px; padding: 0 10px; border: 1px solid var(--line-2); background: var(--panel); font-family: var(--f-display); font-size: 9px; letter-spacing: 0.18em; color: var(--gold); cursor: pointer; }
+.hbtn:hover { background: var(--panel-2); }
+
+#hud-bc { position: absolute; left: 50%; bottom: calc(14px + var(--sa-b)); transform: translateX(-50%); display: grid; justify-items: center; gap: 6px; }
+.weapons { display: flex; gap: 5px; pointer-events: auto; }
+.wslot { width: 50px; height: 44px; border: 1px solid var(--line); background: var(--panel); display: grid; place-items: center; align-content: center; gap: 3px; cursor: pointer; position: relative; padding: 0; }
+.wslot .wk { position: absolute; top: 2px; left: 4px; font-size: 9px; color: var(--ink-faint); }
+.wslot .wn { font-family: var(--f-display); font-size: 8.5px; letter-spacing: 0.08em; }
+.wslot .pips { display: flex; gap: 2px; }
+.wslot .pips i { width: 5px; height: 3px; background: rgba(255, 255, 255, 0.16); }
+.wslot .pips i.on { background: currentColor; }
+.wslot.on { border-color: var(--gold); box-shadow: inset 0 0 0 1px var(--gold), 0 0 14px rgba(255, 207, 112, 0.3); }
+.wslot.locked { opacity: 0.28; }
+.subw { display: flex; gap: 14px; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; color: var(--ink-dim); }
+.nova.ready { color: var(--gold); text-shadow: 0 0 10px var(--gold); }
+
+.xhair { position: absolute; width: 34px; height: 34px; margin: -17px 0 0 -17px; left: 50%; top: 50%; }
+.xhair { filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.9)); }
+.xhair::before { content: ""; position: absolute; inset: 0; border: 2px solid rgba(255, 236, 196, 0.9); border-radius: 50%; clip-path: polygon(0 0, 38% 0, 50% 50%, 62% 0, 100% 0, 100% 38%, 50% 50%, 100% 62%, 100% 100%, 62% 100%, 50% 50%, 38% 100%, 0 100%, 0 62%, 50% 50%, 0 38%); }
+.xhair::after { content: ""; position: absolute; left: 50%; top: 50%; width: 3px; height: 3px; margin: -1.5px 0 0 -1.5px; background: var(--gold-hot); border-radius: 50%; }
+.aim { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border: 1px solid rgba(255, 207, 112, 0.6); transform: rotate(45deg); }
+.lock { position: absolute; width: 60px; height: 60px; margin: -30px 0 0 -30px; }
+.lock::before, .lock::after { content: ""; position: absolute; inset: 0; border: 2px solid var(--danger); clip-path: polygon(0 0, 30% 0, 30% 2px, 2px 2px, 2px 30%, 0 30%, 0 70%, 2px 70%, 2px calc(100% - 2px), 30% calc(100% - 2px), 30% 100%, 0 100%); }
+.lock::after { transform: scaleX(-1); }
+.lock span { position: absolute; top: 100%; left: 50%; transform: translateX(-50%); margin-top: 4px; white-space: nowrap; font-size: 11px; font-weight: 600; color: var(--danger); letter-spacing: 0.05em; }
+.speed { position: absolute; left: 50%; top: calc(50% + 46px); transform: translateX(-50%); display: flex; gap: 5px; align-items: baseline; font-size: 13px; font-weight: 600; color: var(--ink-dim); }
+.speed .u { font-family: var(--f-display); font-size: 7.5px; letter-spacing: 0.2em; }
+#spd-mode { font-family: var(--f-display); font-size: 9px; letter-spacing: 0.24em; color: var(--gold); margin-left: 6px; }
+
+#labels, #dmg { position: absolute; inset: 0; overflow: hidden; }
+.plabel { position: absolute; left: 0; top: 0; display: flex; align-items: center; gap: 7px; white-space: nowrap; will-change: transform; }
+.plabel .dia { width: 8px; height: 8px; border: 1.5px solid currentColor; transform: rotate(45deg); flex: none; }
+.plabel .tx { display: grid; line-height: 1.15; }
+.plabel .nm { font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-shadow: 0 1px 6px #000; }
+.plabel .ds { font-size: 10.5px; color: var(--ink-dim); text-shadow: 0 1px 6px #000; }
+.plabel.edge .tx { display: none; }
+.plabel.wp { color: var(--gold); }
+.plabel.st { color: #7fe6ff; }
+.plabel.boss { color: var(--danger); }
+.plabel.pl { color: #d7dcf2; }
+.plabel.pl.new { color: var(--gold-hot); }
+.arrow { position: absolute; left: 0; top: 0; width: 0; height: 0; border-left: 7px solid transparent; border-right: 7px solid transparent; border-bottom: 13px solid var(--danger); will-change: transform; filter: drop-shadow(0 0 4px rgba(255, 90, 114, 0.8)); }
+.dnum { position: absolute; left: 0; top: 0; font-weight: 700; font-size: 15px; color: #fff; text-shadow: 0 0 6px rgba(0, 0, 0, 0.9), 0 0 2px #000; animation: dfloat 0.9s ease-out forwards; white-space: nowrap; }
+.dnum.crit { color: var(--gold); font-size: 20px; }
+.dnum.heal { color: var(--hull); }
+.dnum.player { color: var(--danger); }
+@keyframes dfloat { 0% { opacity: 0; translate: 0 6px; scale: 0.7; } 15% { opacity: 1; scale: 1.15; } 100% { opacity: 0; translate: 0 -38px; scale: 1; } }
+
+#toasts { position: absolute; right: calc(16px + var(--sa-r)); top: calc(210px + var(--sa-t)); display: grid; gap: 6px; justify-items: end; width: min(320px, 60vw); }
+.toast { background: var(--panel); border-left: 2px solid var(--gold); padding: 7px 12px; font-size: 13px; line-height: 1.3; animation: tin 0.25s ease-out; max-width: 100%; }
+.toast b { color: var(--gold-hot); font-weight: 600; }
+.toast.out { animation: tout 0.4s ease-in forwards; }
+@keyframes tin { from { opacity: 0; transform: translateX(20px); } }
+@keyframes tout { to { opacity: 0; transform: translateX(20px); } }
+.banner { position: absolute; left: 0; right: 0; top: 24%; text-align: center; opacity: 0; transition: opacity 0.5s; padding-inline: 16px; }
+.banner.show { opacity: 1; }
+.banner .b1 { font-family: var(--f-display); font-size: clamp(18px, 3.4vw, 34px); letter-spacing: 0.32em; text-transform: uppercase; text-shadow: 0 0 24px rgba(255, 207, 112, 0.45), 0 2px 10px rgba(0, 0, 0, 0.8); text-wrap: balance; }
+.banner .b2 { margin-top: 8px; font-size: 14px; color: var(--ink); letter-spacing: 0.08em; text-shadow: 0 1px 8px rgba(0, 0, 0, 0.9), 0 0 2px #000; }
+.banner.red .b1 { color: var(--danger); text-shadow: 0 0 24px rgba(255, 90, 114, 0.6); }
+.prompt { position: absolute; left: 50%; bottom: calc(118px + var(--sa-b)); transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line); padding: 7px 14px; font-size: 13px; color: var(--ink); white-space: nowrap; }
+.prompt kbd { font-family: var(--f-display); font-size: 9px; border: 1px solid var(--line-2); padding: 1px 5px; color: var(--gold); }
+
+.discover { position: absolute; left: calc(16px + var(--sa-l)); top: 50%; transform: translateY(-50%); width: 250px; background: var(--panel); border: 1px solid var(--line); padding: 14px 16px 16px; animation: tin 0.35s ease-out; }
+.discover .eyebrow { margin: 0 0 6px; }
+.discover h3 { margin: 0; font-family: var(--f-display); font-size: 16px; letter-spacing: 0.12em; color: var(--gold-hot); font-weight: 400; }
+.discover .cls { margin: 4px 0 10px; font-size: 12.5px; color: var(--ink-dim); }
+.discover dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 0; font-size: 12.5px; }
+.discover dt { color: var(--ink-faint); }
+.discover dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.discover .desc { margin: 10px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--ink-dim); }
+.eyebrow { font-family: var(--f-display); font-size: 8.5px; letter-spacing: 0.28em; text-transform: uppercase; color: var(--gold); }
+
+/* ─── touch controls ─── */
+#touch { position: fixed; inset: 0; pointer-events: none; }
+#stickzone { position: absolute; left: 0; bottom: 0; width: 46%; height: 70%; pointer-events: auto; }
+.stick { position: absolute; width: 132px; height: 132px; margin: -66px 0 0 -66px; border-radius: 50%; border: 1.5px solid rgba(255, 207, 112, 0.35); background: radial-gradient(circle, rgba(255, 207, 112, 0.06), rgba(255, 207, 112, 0.02) 70%); pointer-events: none; }
+.knob { position: absolute; left: 50%; top: 50%; width: 54px; height: 54px; margin: -27px 0 0 -27px; border-radius: 50%; background: rgba(255, 207, 112, 0.22); border: 1.5px solid rgba(255, 207, 112, 0.75); }
+.stick-hint { position: absolute; left: calc(24px + var(--sa-l)); bottom: calc(24px + var(--sa-b)); width: 100px; height: 100px; border-radius: 50%; border: 1.5px dashed rgba(255, 207, 112, 0.22); display: grid; place-items: center; font-family: var(--f-display); font-size: 8px; letter-spacing: 0.2em; color: rgba(255, 207, 112, 0.5); }
+.tbtns { position: absolute; right: calc(14px + var(--sa-r)); bottom: calc(14px + var(--sa-b)); width: 236px; height: 220px; pointer-events: none; }
+.tb { position: absolute; pointer-events: auto; border-radius: 50%; border: 1.5px solid rgba(255, 207, 112, 0.5); background: rgba(8, 11, 24, 0.55); color: var(--gold-hot); font-family: var(--f-display); font-size: 8.5px; letter-spacing: 0.12em; display: grid; place-items: center; touch-action: none; }
+.tb.on { background: rgba(255, 207, 112, 0.35); border-color: var(--gold-hot); }
+.tb-fire { width: 92px; height: 92px; right: 0; bottom: 0; font-size: 10px; }
+.tb-boost { width: 62px; height: 62px; right: 104px; bottom: 6px; }
+.tb-msl { width: 58px; height: 58px; right: 18px; bottom: 104px; }
+.tb-swap { width: 54px; height: 54px; right: 92px; bottom: 82px; }
+.tb-nova { width: 54px; height: 54px; right: 172px; bottom: 78px; opacity: 0.35; }
+.tb-nova.ready { opacity: 1; border-color: var(--gold-hot); box-shadow: 0 0 16px rgba(255, 207, 112, 0.6); }
+.tb-brake { width: 50px; height: 50px; right: 178px; bottom: 6px; }
+
+/* ─── screens ─── */
+.screen { position: fixed; inset: 0; display: grid; place-items: center; padding: calc(16px + var(--sa-t)) calc(16px + var(--sa-r)) calc(16px + var(--sa-b)) calc(16px + var(--sa-l)); background: radial-gradient(ellipse at center, rgba(4, 5, 12, 0.35), rgba(4, 5, 12, 0.82)); overflow-y: auto; touch-action: pan-y; }
+.panel { --px: 22px; --py: 20px; background: var(--panel); border: 1px solid var(--line); width: min(720px, 100%); max-height: 100%; overflow-y: auto; padding: var(--py) var(--px); display: grid; gap: 14px; position: relative; }
+.panel.narrow { width: min(420px, 100%); }
+.panel.center { text-align: center; justify-items: center; }
+.panel h2 { margin: 0; font-family: var(--f-display); font-weight: 400; font-size: 18px; letter-spacing: 0.18em; text-transform: uppercase; text-wrap: balance; }
+.panel p { margin: 0; color: var(--ink-dim); line-height: 1.5; }
+.panel::before, .panel::after { content: ""; position: absolute; width: 14px; height: 14px; border: 1.5px solid var(--gold); pointer-events: none; }
+.panel::before { left: -1px; top: -1px; border-right: 0; border-bottom: 0; }
+.panel::after { right: -1px; bottom: -1px; border-left: 0; border-top: 0; }
+.btn { border: 1px solid var(--line-2); background: transparent; padding: 11px 20px; font-family: var(--f-display); font-size: 10.5px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--gold-hot); cursor: pointer; min-height: 44px; }
+.btn:hover { background: rgba(255, 207, 112, 0.08); }
+.btn.primary { background: var(--gold); color: var(--gold-ink); border-color: var(--gold); }
+.btn.primary:hover { background: var(--gold-hot); }
+.btn.small { padding: 8px 14px; min-height: 36px; font-size: 9px; }
+.btn:disabled { opacity: 0.35; cursor: default; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+.chip { border: 1px solid var(--line); background: var(--panel); padding: 7px 12px; font-size: 12.5px; cursor: pointer; color: var(--ink); min-height: 36px; }
+
+.title-screen { background: radial-gradient(ellipse at 30% 60%, rgba(4, 5, 12, 0.05), rgba(4, 5, 12, 0.6) 80%); place-items: center start; }
+.title-wrap { display: grid; gap: 18px; max-width: 520px; padding-left: clamp(0px, 4vw, 60px); }
+.logo { margin: 0; font-family: var(--f-display); font-weight: 400; font-size: clamp(30px, 6.2vw, 64px); line-height: 1.08; letter-spacing: 0.14em; color: var(--ink); text-shadow: 0 0 40px rgba(255, 207, 112, 0.25); }
+.logo span { color: var(--gold); }
+.tagline { margin: 0; font-size: 16px; line-height: 1.5; color: var(--ink-dim); max-width: 40ch; text-wrap: balance; }
+.menu { display: flex; flex-wrap: wrap; gap: 10px; }
+.title-opts { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 13px; color: var(--ink-dim); }
+.title-opts label { display: flex; align-items: center; gap: 8px; }
+select { background: var(--panel-2); color: var(--ink); border: 1px solid var(--line); padding: 7px 10px; font: inherit; font-size: 13px; min-height: 36px; }
+.hint { margin: 0; font-size: 12.5px; color: var(--ink-faint); }
+.howto { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px; }
+.howto h3 { margin: 0 0 8px; font-family: var(--f-display); font-size: 10px; letter-spacing: 0.24em; color: var(--gold); font-weight: 400; text-transform: uppercase; }
+.keys { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; font-size: 13.5px; align-items: baseline; }
+.keys kbd { font-family: var(--f-display); font-size: 9px; letter-spacing: 0.08em; color: var(--gold-hot); border: 1px solid var(--line-2); padding: 3px 6px; white-space: nowrap; justify-self: start; }
+.keys span { color: var(--ink-dim); }
+.loading { position: fixed; inset: 0; display: grid; place-items: center; background: var(--void); z-index: 5; }
+.loading .ld { display: grid; gap: 12px; justify-items: center; text-align: center; padding-inline: 16px; }
+.loading .bar { width: 220px; height: 2px; background: rgba(255, 207, 112, 0.15); }
+.loading .bar i { display: block; height: 100%; width: 0%; background: var(--gold); transition: width 0.2s; }
+.loading p { margin: 0; font-size: 13px; color: var(--ink-dim); letter-spacing: 0.06em; }
+.fatal { position: fixed; inset: 0; display: grid; place-items: center; background: var(--void); z-index: 9; padding-inline: 16px; text-align: center; }
+.fatal div { max-width: 46ch; display: grid; gap: 10px; }
+.fatal h2 { margin: 0; font-family: var(--f-display); font-weight: 400; letter-spacing: 0.16em; color: var(--gold); font-size: 16px; }
+.fatal p { margin: 0; color: var(--ink-dim); line-height: 1.5; }
+
+.tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+.tab { border: 1px solid var(--line); background: transparent; padding: 7px 12px; font-family: var(--f-display); font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-dim); cursor: pointer; min-height: 34px; }
+.tab.on { color: var(--gold-ink); background: var(--gold); border-color: var(--gold); }
+.panel-head { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center; }
+.panel-foot { display: flex; flex-wrap: wrap; gap: 10px; position: sticky; bottom: calc(-1 * var(--py)); margin: 0 calc(-1 * var(--px)) calc(-1 * var(--py)); padding: 12px var(--px) var(--py); background: linear-gradient(to bottom, rgba(10, 13, 28, 0), rgb(10, 13, 28) 32%); z-index: 1; }
+.statgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.stat { border: 1px solid var(--line); padding: 8px 10px; display: grid; gap: 2px; }
+.stat .v { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat .k { font-size: 11.5px; color: var(--ink-faint); letter-spacing: 0.04em; }
+.list { display: grid; gap: 6px; }
+.li { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; border-bottom: 1px solid rgba(255, 255, 255, 0.06); padding: 6px 0; font-size: 13.5px; }
+.li .s { color: var(--ink-faint); font-size: 12px; }
+.li.done .s { color: var(--hull); }
+.setrow { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.06); font-size: 14px; }
+.setrow input[type=range] { width: 160px; accent-color: var(--gold); }
+.toggle { border: 1px solid var(--line-2); background: transparent; min-width: 68px; min-height: 34px; color: var(--ink-dim); cursor: pointer; font-size: 12.5px; }
+.toggle.on { background: var(--gold); color: var(--gold-ink); border-color: var(--gold); }
+.sectitle { margin: 6px 0 0; font-family: var(--f-display); font-size: 9.5px; letter-spacing: 0.24em; color: var(--gold); font-weight: 400; text-transform: uppercase; }
+
+.shop { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; }
+.item { border: 1px solid var(--line); padding: 10px 12px; display: grid; gap: 6px; align-content: start; background: rgba(255, 255, 255, 0.015); }
+.item h4 { margin: 0; font-size: 14px; font-weight: 600; display: flex; justify-content: space-between; gap: 8px; }
+.item h4 .lv { color: var(--gold); font-variant-numeric: tabular-nums; font-size: 12.5px; white-space: nowrap; flex: none; }
+#scr-station .panel { width: min(800px, 100%); }
+.item p { font-size: 12.5px; }
+.item .buy { justify-self: start; }
+.credits-line { font-size: 14px; color: var(--ink-dim); }
+.credits-line b { color: var(--gold-hot); font-size: 18px; margin-left: 6px; font-variant-numeric: tabular-nums; }
+
+.map-screen { place-items: stretch; padding: 0; background: rgba(3, 4, 10, 0.94); }
+#mapc { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+.map-top { position: absolute; left: calc(16px + var(--sa-l)); right: calc(16px + var(--sa-r)); top: calc(12px + var(--sa-t)); display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; pointer-events: none; }
+.map-top > * { pointer-events: auto; }
+.map-top h2 { margin: 0; font-family: var(--f-display); font-weight: 400; font-size: 13px; letter-spacing: 0.26em; text-transform: uppercase; }
+.map-info { position: absolute; right: calc(16px + var(--sa-r)); bottom: calc(16px + var(--sa-b)); width: min(330px, calc(100% - 32px)); max-height: 60%; }
+.map-info h3 { margin: 0; font-family: var(--f-display); font-weight: 400; font-size: 15px; letter-spacing: 0.14em; color: var(--gold-hot); }
+.map-info .meta { font-size: 12.5px; color: var(--ink-dim); }
+.map-legend { position: absolute; left: calc(16px + var(--sa-l)); bottom: calc(16px + var(--sa-b)); font-size: 12px; color: var(--ink-faint); display: grid; gap: 4px; pointer-events: none; }
+
+/* compact layout for phones and short screens */
+@media (max-height: 520px), (max-width: 640px) {
+  #hud-tl { width: 190px; gap: 4px; top: calc(8px + var(--sa-t)); left: calc(12px + var(--sa-l)); }
+  .gauge { grid-template-columns: 40px 1fr 36px; gap: 6px; }
+  .gauge .num { font-size: 11px; }
+  #radar { width: 104px; height: 104px; }
+  #hud-tr { top: calc(8px + var(--sa-t)); right: calc(10px + var(--sa-r)); gap: 5px; }
+  #hud-tc { top: calc(8px + var(--sa-t)); width: min(40vw, 360px); }
+  .obj { font-size: 11.5px; }
+  .wslot { width: 40px; height: 34px; }
+  .wslot .wn { font-size: 7px; }
+  #toasts { top: calc(150px + var(--sa-t)); right: calc(10px + var(--sa-r)); width: min(260px, 50vw); }
+  .toast { font-size: 12px; padding: 5px 10px; }
+  .discover { width: 210px; padding: 10px 12px; left: calc(12px + var(--sa-l)); }
+  .discover dl, .discover .desc { font-size: 11.5px; }
+  .panel { --px: 16px; --py: 14px; gap: 10px; }
+}
+@media (max-width: 560px) and (min-height: 521px) {
+  #hud-tc { left: calc(12px + var(--sa-l)); transform: none; top: calc(96px + var(--sa-t)); width: calc(100% - 150px - var(--sa-l) - var(--sa-r)); justify-items: start; text-align: left; }
+  #toasts { top: calc(178px + var(--sa-t)); width: min(196px, 50vw); }
+  #toasts .toast:nth-last-child(n+3) { display: none; }
+  .banner { top: 36%; }
+  .discover { left: calc(12px + var(--sa-l)); top: calc(178px + var(--sa-t)); transform: none; width: min(166px, 42vw); padding: 8px 12px; }
+  .discover .eyebrow { margin: 0 0 2px; font-size: 7.5px; }
+  .discover h3 { font-size: 13px; }
+  .discover .cls { margin: 2px 0 0; font-size: 11px; }
+  .discover dl, .discover .desc { display: none; }
+}
+@media (max-height: 520px) {
+  #toasts { left: calc(12px + var(--sa-l)); right: auto; top: calc(102px + var(--sa-t)); justify-items: start; width: min(290px, 38vw); }
+  .toast { border-left: 2px solid var(--gold); }
+  #toasts .toast:nth-last-child(n+3) { display: none; }
+  .discover { left: auto; right: calc(10px + var(--sa-r)); top: calc(156px + var(--sa-t)); transform: none; width: 210px; padding: 8px 12px; }
+  .discover .eyebrow { margin: 0 0 2px; font-size: 7.5px; }
+  .discover h3 { font-size: 13px; }
+  .discover .cls { margin: 2px 0 0; font-size: 11px; }
+  .discover dl, .discover .desc { display: none; }
+  .banner { top: 30%; }
+  .banner .b1 { font-size: 18px; }
+  .banner .b2 { font-size: 12px; }
+}
+@media (pointer: coarse) {
+  #hud-bc { bottom: calc(10px + var(--sa-b)); }
+  #hud-bc .weapons { display: none; }
+  .speed { top: calc(50% + 40px); }
+  .prompt { bottom: calc(240px + var(--sa-b)); }
+}
+@media (pointer: coarse) and (max-height: 520px) {
+  .tbtns { transform: scale(0.88); transform-origin: right bottom; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast, .discover { animation: none; }
+  .dnum { animation-duration: 0.6s; }
+}
+</style>
+
+<canvas id="game" aria-label="Starlight Voyager game view"></canvas>
+
+<div id="hud" hidden>
+  <div id="hud-tl">
+    <div class="pilot-row">
+      <div class="lvl"><span class="lbl">LV</span><span id="h-lvl" class="num">1</span></div>
+      <div class="xpbar"><i id="h-xp"></i></div>
+      <div class="credits"><span class="gem" aria-hidden="true"></span><span id="h-cr" class="num">0</span></div>
+    </div>
+    <div class="gauge g-hull" id="g-hull"><span class="lbl">Hull</span><div class="bar"><i id="h-hull"></i></div><span id="h-hull-n" class="num">0</span></div>
+    <div class="gauge g-shield"><span class="lbl">Shield</span><div class="bar"><i id="h-shield"></i></div><span id="h-shield-n" class="num">0</span></div>
+    <div class="gauge g-energy"><span class="lbl">Boost</span><div class="bar"><i id="h-energy"></i></div><span id="h-energy-n" class="num">0</span></div>
+    <div id="h-buffs" class="buffs"></div>
+  </div>
+  <div id="hud-tc">
+    <div id="h-loc"><span id="h-sys" class="sys">Solace</span><span id="h-danger" class="danger"></span></div>
+    <div id="h-obj" class="obj"></div>
+    <div id="h-boss" class="boss" hidden><div id="h-boss-name" class="boss-name"></div><div class="bar"><i id="h-boss-bar"></i></div></div>
+  </div>
+  <div id="hud-tr">
+    <canvas id="radar" width="300" height="300" aria-label="Radar"></canvas>
+    <div class="hud-btns">
+      <button id="b-map" class="hbtn" aria-label="Open galaxy map">Map</button>
+      <button id="b-pause" class="hbtn" aria-label="Pause">II</button>
+    </div>
+  </div>
+  <div id="hud-bc">
+    <div id="h-weapons" class="weapons"></div>
+    <div class="subw"><span id="h-msl">MSL 0</span><span id="h-nova" class="nova">NOVA 0%</span></div>
+  </div>
+  <div id="labels"></div>
+  <div id="xhair" class="xhair"></div>
+  <div id="aim" class="aim" hidden></div>
+  <div id="lock" class="lock" hidden><span id="lock-name"></span></div>
+  <div id="speed" class="speed"><span id="spd-n" class="num">0</span><span class="u">km/s</span><span id="spd-mode"></span></div>
+  <div id="dmg"></div>
+  <div id="toasts"></div>
+  <div id="banner" class="banner"><div class="b1" id="ban-1"></div><div class="b2" id="ban-2"></div></div>
+  <div id="prompt" class="prompt" hidden></div>
+  <div id="discover" class="discover" hidden>
+    <p class="eyebrow">New world charted</p>
+    <h3 id="dc-name"></h3>
+    <p id="dc-cls" class="cls"></p>
+    <dl>
+      <dt>Radius</dt><dd id="dc-rad"></dd>
+      <dt>Surface gravity</dt><dd id="dc-g"></dd>
+      <dt>Mean temperature</dt><dd id="dc-t"></dd>
+      <dt>Orbit</dt><dd id="dc-au"></dd>
+      <dt>Day length</dt><dd id="dc-day"></dd>
+    </dl>
+    <p id="dc-desc" class="desc"></p>
+  </div>
+</div>
+
+<div id="touch" hidden>
+  <div id="stickzone"></div>
+  <div id="stickhint" class="stick-hint">Steer</div>
+  <div id="stick" class="stick" hidden><div id="knob" class="knob"></div></div>
+  <div class="tbtns">
+    <button id="t-fire" class="tb tb-fire" aria-label="Fire">Fire</button>
+    <button id="t-boost" class="tb tb-boost" aria-label="Boost, hold to cruise">Boost</button>
+    <button id="t-msl" class="tb tb-msl" aria-label="Fire missiles">Msl</button>
+    <button id="t-swap" class="tb tb-swap" aria-label="Next weapon">Swap</button>
+    <button id="t-nova" class="tb tb-nova" aria-label="Nova bomb">Nova</button>
+    <button id="t-brake" class="tb tb-brake" aria-label="Brake">Brake</button>
+  </div>
+</div>
+
+<section id="scr-title" class="screen title-screen" hidden>
+  <div class="title-wrap">
+    <p class="eyebrow">9 star systems · 46 worlds</p>
+    <h1 class="logo">Starlight<br><span>Voyager</span></h1>
+    <p class="tagline">Fly anywhere in the galaxy. Gather weapons and upgrades scattered across its worlds, and defeat the guardian of every star.</p>
+    <div class="menu">
+      <button id="btn-continue" class="btn primary" hidden>Continue voyage</button>
+      <button id="btn-new" class="btn primary">Launch</button>
+      <button id="btn-howto" class="btn">How to fly</button>
+    </div>
+    <div class="title-opts">
+      <label for="opt-q-title">Graphics
+        <select id="opt-q-title">
+          <option value="auto">Auto</option>
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
+        </select>
+      </label>
+      <button id="btn-snd-title" class="chip">Sound: on</button>
+    </div>
+    <p id="rotate-hint" class="hint" hidden>Turn your phone sideways for the widest view.</p>
+  </div>
+</section>
+
+<section id="scr-howto" class="screen" hidden>
+  <div class="panel">
+    <div class="panel-head"><h2>How to fly</h2><button id="howto-close" class="btn small">Close</button></div>
+    <div class="howto">
+      <div>
+        <h3>Keyboard &amp; mouse</h3>
+        <div class="keys">
+          <kbd>Mouse</kbd><span>Steer toward the pointer</span>
+          <kbd>Click / Space</kbd><span>Fire</span>
+          <kbd>Right-click / F</kbd><span>Missiles</span>
+          <kbd>Shift</kbd><span>Boost. Hold to engage cruise drive</span>
+          <kbd>W / S</kbd><span>Speed up / slow down</span>
+          <kbd>A / D</kbd><span>Strafe</span>
+          <kbd>Q / E</kbd><span>Roll</span>
+          <kbd>1–6 / Wheel</kbd><span>Choose weapon</span>
+          <kbd>X</kbd><span>Nova bomb when charged</span>
+          <kbd>M</kbd><span>Galaxy map</span>
+          <kbd>Esc / P</kbd><span>Pause</span>
+        </div>
+      </div>
+      <div>
+        <h3>Touch</h3>
+        <div class="keys">
+          <kbd>Left thumb</kbd><span>Drag anywhere on the left to steer</span>
+          <kbd>Fire</kbd><span>Hold to shoot. Auto-fire is on by default</span>
+          <kbd>Boost</kbd><span>Hold for speed; keep holding to cruise</span>
+          <kbd>Msl</kbd><span>Homing missiles</span>
+          <kbd>Swap</kbd><span>Next weapon</span>
+          <kbd>Nova</kbd><span>Clears everything nearby</span>
+        </div>
+        <h3 style="margin-top:16px">Tips</h3>
+        <div class="keys">
+          <kbd>Stations</kbd><span>Fly through the glowing gate to repair, shop and save</span>
+          <kbd>Planets</kbd><span>Each world hides supplies, upgrades or a new weapon</span>
+          <kbd>Defeat</kbd><span>Never costs you anything. You relaunch at your last station</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="scr-pause" class="screen" hidden>
+  <div class="panel">
+    <div class="panel-head">
+      <h2>Paused</h2>
+      <div class="tabs" role="tablist">
+        <button class="tab on" data-tab="ship" role="tab">Ship</button>
+        <button class="tab" data-tab="log" role="tab">Log</button>
+        <button class="tab" data-tab="settings" role="tab">Settings</button>
+        <button class="tab" data-tab="controls" role="tab">Controls</button>
+      </div>
+    </div>
+    <div id="tab-ship" class="tabbody"></div>
+    <div id="tab-log" class="tabbody" hidden></div>
+    <div id="tab-settings" class="tabbody" hidden>
+      <div class="setrow"><span>Graphics quality</span>
+        <select id="opt-q">
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
+        </select></div>
+      <div class="setrow"><span>Auto-fire at targets in your sights</span><button id="opt-autofire" class="toggle">On</button></div>
+      <div class="setrow"><span>Invert vertical steering</span><button id="opt-invert" class="toggle">Off</button></div>
+      <div class="setrow"><label for="opt-sens">Steering sensitivity</label><input id="opt-sens" type="range" min="0.5" max="1.6" step="0.05" value="1"></div>
+      <div class="setrow"><label for="opt-vol">Sound effects</label><input id="opt-vol" type="range" min="0" max="1" step="0.05" value="0.8"></div>
+      <div class="setrow"><label for="opt-mus">Music</label><input id="opt-mus" type="range" min="0" max="1" step="0.05" value="0.6"></div>
+      <div class="setrow"><span>Screen shake and flashes</span><button id="opt-shake" class="toggle">On</button></div>
+    </div>
+    <div id="tab-controls" class="tabbody" hidden></div>
+    <div class="panel-foot">
+      <button id="btn-resume" class="btn primary">Resume</button>
+      <button id="btn-pmap" class="btn">Galaxy map</button>
+      <button id="btn-quit" class="btn">Save &amp; exit to title</button>
+    </div>
+  </div>
+</section>
+
+<section id="scr-map" class="screen map-screen" hidden>
+  <canvas id="mapc" aria-label="Galaxy map"></canvas>
+  <div class="map-top">
+    <h2 id="map-title">Galaxy chart</h2>
+    <div class="tabs">
+      <button id="map-gal" class="tab on">Galaxy</button>
+      <button id="map-sys" class="tab">This system</button>
+    </div>
+    <button id="map-close" class="btn small">Close</button>
+  </div>
+  <div class="map-legend" id="map-legend"></div>
+  <aside id="map-info" class="map-info panel" hidden></aside>
+</section>
+
+<section id="scr-station" class="screen" hidden>
+  <div class="panel">
+    <div class="panel-head">
+      <div>
+        <p class="eyebrow">Docked</p>
+        <h2 id="st-name">Station</h2>
+      </div>
+      <div class="credits-line">Credits<b id="st-cr">0</b></div>
+    </div>
+    <p id="st-status">Hull repaired, shields charged and missiles restocked. Progress saved.</p>
+    <p class="sectitle">Shipyard upgrades</p>
+    <div id="shop" class="shop"></div>
+    <div class="panel-foot"><button id="btn-undock" class="btn primary">Undock</button></div>
+  </div>
+</section>
+
+<section id="scr-dead" class="screen" hidden>
+  <div class="panel narrow center">
+    <p class="eyebrow">Hull breach</p>
+    <h2>Emergency warp engaged</h2>
+    <p>Your ship is rebuilt at <b id="dead-where">Haven Station</b> with every weapon and upgrade intact.</p>
+    <button id="btn-respawn" class="btn primary">Relaunch</button>
+  </div>
+</section>
+
+<section id="scr-win" class="screen" hidden>
+  <div class="panel narrow center">
+    <p class="eyebrow">The galaxy is free</p>
+    <h2>The Void Sovereign has fallen</h2>
+    <p id="win-text">Every guardian is defeated. The stars are yours to wander.</p>
+    <div id="win-stats" class="statgrid"></div>
+    <button id="btn-win" class="btn primary">Keep exploring</button>
+  </div>
+</section>
+
+<section id="scr-confirm" class="screen" hidden>
+  <div class="panel narrow center">
+    <h2 id="cf-title">Are you sure?</h2>
+    <p id="cf-text"></p>
+    <div class="row"><button id="cf-yes" class="btn primary">Yes</button><button id="cf-no" class="btn">Cancel</button></div>
+  </div>
+</section>
+
+<div id="loading" class="loading">
+  <div class="ld">
+    <p class="eyebrow">Starlight Voyager</p>
+    <div class="bar"><i id="ld-bar"></i></div>
+    <p id="ld-text">Charting the galaxy</p>
+  </div>
+</div>
+<div id="fatal" class="fatal" hidden><div><h2>Can’t start the engine</h2><p id="fatal-text">This browser can’t run WebGL 2, which the game needs. Try a recent version of Chrome, Safari, Firefox or Edge.</p></div></div>
+<!--SCRIPT-->
