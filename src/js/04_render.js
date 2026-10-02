@@ -2,7 +2,9 @@
 const QUALITY = {
   high: { label: 'High', dpr: 2, scale: 1, msaa: 4, bloom: true, levels: 6, planetTex: 2048, sky: 1024, stars: 7000, fx: 1 },
   medium: { label: 'Medium', dpr: 1.5, scale: 1, msaa: 4, bloom: true, levels: 5, planetTex: 1024, sky: 768, stars: 5000, fx: 0.85 },
-  low: { label: 'Low', dpr: 1, scale: 0.8, msaa: 0, bloom: false, levels: 4, planetTex: 512, sky: 512, stars: 3500, fx: 0.6 },
+  low: { label: 'Low', dpr: 1, scale: 0.85, msaa: 0, bloom: true, levels: 4, planetTex: 512, sky: 512, stars: 3500, fx: 0.6 },
+  // only used in safe mode (after a graphics failure): plainest settings that still look like the game
+  safe: { label: 'Safe', dpr: 1, scale: 0.75, msaa: 0, bloom: false, levels: 0, planetTex: 512, sky: 384, stars: 2500, fx: 0.5 },
 };
 
 class FXBatch {
@@ -47,14 +49,13 @@ const R = {
     this.setQuality(qName, true);
     const P = this.P, fv = SH.fsVS;
     P.sky = makeProgram('sky', fv, SH.skyFS);
-    P.skyBake = makeProgram('skyBake', fv, SH.skyBakeFS);
     P.stars = makeProgram('stars', SH.starsVS, SH.starsFS);
-    P.planetBake = makeProgram('planetBake', fv, SH.planetBakeFS);
-    P.planet = makeProgram('planet', SH.planetVS, SH.planetFS);
+    // planet-surface and sky bake programs compile on demand (see bakeProg / bakeSkyStart)
+    P.planet = this.tryProgram('planet', SH.planetVS, SH.planetFS);
     P.atmo = makeProgram('atmo', SH.atmoVS, SH.atmoFS);
     P.ring = makeProgram('ring', SH.ringVS, SH.ringFS);
-    P.sun = makeProgram('sun', SH.sunVS, SH.sunFS);
-    P.disk = makeProgram('disk', SH.diskVS, SH.diskFS);
+    P.sun = this.tryProgram('sun', SH.sunVS, SH.sunFS);
+    P.disk = this.tryProgram('disk', SH.diskVS, SH.diskFS);
     P.hull = makeProgram('hull', SH.hullVS, SH.hullFS);
     P.hullI = makeProgram('hullI', SH.hullVS, SH.hullFS, '#define INST 1\n');
     P.fx = makeProgram('fx', SH.fxVS, SH.fxFS);
@@ -120,7 +121,27 @@ const R = {
     this.starPts = makeMesh({ pos, col }, gl.POINTS);
   },
 
-  bakeSky(size, core, seed) {
+  // compile; if the device's driver rejects the full shader, retry a simpler variant
+  tryProgram(name, vs, fs) {
+    try { return makeProgram(name, vs, fs); }
+    catch (e) { console.warn(name + ': full shader failed, using simpler version', e); this.fallbacks.push(name); return makeProgram(name + '-lite', vs, fs, '#define LITE 1\n'); }
+  },
+  fallbacks: [], bakeProgs: {},
+  bakeProg(fn) {
+    if (fn in this.bakeProgs) return this.bakeProgs[fn];
+    let pr = null;
+    try { pr = makeProgram('bake-' + fn, SH.fsVS, SH.bakeSource(fn)); }
+    catch (e) {
+      console.warn('Planet shader ' + fn + ' failed on this device; using a simpler surface', e);
+      this.fallbacks.push(fn);
+      if (fn !== 'tFallback' && fn !== 'clouds') pr = this.bakeProg('tFallback');
+    }
+    this.bakeProgs[fn] = pr;
+    return pr;
+  },
+
+  // sky cube map, baked one face per call so no single GPU submission runs long
+  bakeSkyStart(size, core, seed) {
     if (this.skyTex) gl.deleteTexture(this.skyTex);
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_CUBE_MAP, tex);
@@ -129,54 +150,68 @@ const R = {
     gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    const fb = gl.createFramebuffer();
-    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-    const P = useProg(this.P.skyBake);
-    U.v3(P, 'u_core', core.x, core.y, core.z); U.v3(P, 'u_seed', seed[0], seed[1], seed[2]);
-    gl.viewport(0, 0, size, size);
+    let prog = null;
+    try { prog = this.P.skyBake || (this.P.skyBake = makeProgram('skyBake', SH.fsVS, SH.skyBakeFS)); }
+    catch (e) { console.warn('Sky shader failed; using a simpler sky', e); this.fallbacks.push('sky'); prog = this.P.skyBake = makeProgram('skyBake-lite', SH.fsVS, SH.skyBakeFallbackFS); }
+    this.skyTex = tex;
+    this._sky = { tex, size, core, seed, prog, fb: gl.createFramebuffer() };
+  },
+  bakeSkyFace(f) {
+    const S = this._sky;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, S.fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_CUBE_MAP_POSITIVE_X + f, S.tex, 0);
+    const P = useProg(S.prog);
+    U.v3(P, 'u_core', S.core.x, S.core.y, S.core.z); U.v3(P, 'u_seed', S.seed[0], S.seed[1], S.seed[2]);
+    gl.viewport(0, 0, S.size, S.size);
     setBlend(0); setDepth(false, false); setCull(0);
-    for (let f = 0; f < 6; f++) {
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_CUBE_MAP_POSITIVE_X + f, tex, 0);
-      U.i(P, 'u_face', f);
-      drawFullscreen();
-    }
+    U.i(P, 'u_face', f);
+    drawFullscreen();
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.deleteFramebuffer(fb);
-    gl.bindTexture(gl.TEXTURE_CUBE_MAP, tex);
+    gl.flush();
+  },
+  bakeSkyEnd() {
+    const S = this._sky;
+    gl.deleteFramebuffer(S.fb);
+    gl.bindTexture(gl.TEXTURE_CUBE_MAP, S.tex);
     while (gl.getError() !== gl.NO_ERROR) { /* clear */ }
     gl.generateMipmap(gl.TEXTURE_CUBE_MAP);
     this.skyHasMips = gl.getError() === gl.NO_ERROR;
     gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, this.skyHasMips ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR);
-    this.skyTex = tex;
+    this._sky = null;
   },
+  bakeSky(size, core, seed) { this.bakeSkyStart(size, core, seed); for (let f = 0; f < 6; f++) this.bakeSkyFace(f); this.bakeSkyEnd(); },
 
   // bake a planet surface (and optional cloud layer); returns textures
   bakePlanet(pd, size) {
     const W = size, H = size >> 1;
+    const prog = this.bakeProg(SH.bakeTypeFn[pd.typeId] || 'tRogue');
+    if (!prog) return { tex: null, cloud: null, w: 0, h: 0 };
     const T = makeTarget(W, H, { mips: true, repeatS: true });
-    const P = useProg(this.P.planetBake);
+    const flat = new Float32Array(18);
+    for (let i = 0; i < 6; i++) { const c = pd.pal[Math.min(i, pd.pal.length - 1)]; flat[i * 3] = c[0]; flat[i * 3 + 1] = c[1]; flat[i * 3 + 2] = c[2]; }
+    const setU = (P) => {
+      U.v3(P, 'u_seed', pd.seed[0], pd.seed[1], pd.seed[2]);
+      if (P.u.u_c) gl.uniform3fv(P.u.u_c, flat);
+      U.v4(P, 'u_p', pd.p[0], pd.p[1], pd.p[2], pd.p[3]);
+      U.v4(P, 'u_p2', pd.p2[0], pd.p2[1], pd.p2[2], pd.p2[3]);
+      U.v3(P, 'u_spot', pd.spot[0], pd.spot[1], pd.spot[2]);
+    };
     gl.bindFramebuffer(gl.FRAMEBUFFER, T.fb);
     gl.viewport(0, 0, W, H);
     setBlend(0); setDepth(false, false); setCull(0);
-    U.i(P, 'u_type', pd.typeId); U.i(P, 'u_mode', 0);
-    U.v3(P, 'u_seed', pd.seed[0], pd.seed[1], pd.seed[2]);
-    const flat = new Float32Array(18);
-    for (let i = 0; i < 6; i++) { const c = pd.pal[Math.min(i, pd.pal.length - 1)]; flat[i * 3] = c[0]; flat[i * 3 + 1] = c[1]; flat[i * 3 + 2] = c[2]; }
-    if (P.u.u_c) gl.uniform3fv(P.u.u_c, flat);
-    U.v4(P, 'u_p', pd.p[0], pd.p[1], pd.p[2], pd.p[3]);
-    U.v4(P, 'u_p2', pd.p2[0], pd.p2[1], pd.p2[2], pd.p2[3]);
-    U.v3(P, 'u_spot', pd.spot[0], pd.spot[1], pd.spot[2]);
+    setU(useProg(prog));
     drawFullscreen();
     gl.bindTexture(gl.TEXTURE_2D, T.tex);
     gl.generateMipmap(gl.TEXTURE_2D);
     if (GLX.aniso) gl.texParameterf(gl.TEXTURE_2D, GLX.aniso.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(4, GLX.maxAniso));
     let cloud = null;
-    if (pd.clouds) {
+    const cprog = pd.clouds ? this.bakeProg('clouds') : null;
+    if (cprog) {
       cloud = makeTarget(W, H, { mips: true, repeatS: true, internal: gl.R8, format: gl.RED, type: gl.UNSIGNED_BYTE });
       if (!cloud.ok) { freeTarget(cloud); cloud = makeTarget(W, H, { mips: true, repeatS: true }); }
       gl.bindFramebuffer(gl.FRAMEBUFFER, cloud.fb);
       gl.viewport(0, 0, W, H);
-      U.i(P, 'u_mode', 1);
+      setU(useProg(cprog));
       drawFullscreen();
       gl.bindTexture(gl.TEXTURE_2D, cloud.tex);
       gl.generateMipmap(gl.TEXTURE_2D);
@@ -185,6 +220,7 @@ const R = {
     // keep only textures; framebuffers can go
     gl.deleteFramebuffer(T.fb);
     if (cloud) gl.deleteFramebuffer(cloud.fb);
+    gl.flush();
     return { tex: T.tex, cloud: cloud ? cloud.tex : null, w: W, h: H };
   },
 

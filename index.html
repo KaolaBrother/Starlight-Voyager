@@ -42,6 +42,7 @@
 [hidden] { display: none !important; }
 *, *::before, *::after { box-sizing: border-box; }
 html, body { height: 100%; }
+html, body { overscroll-behavior: none; }
 html { overflow: hidden; touch-action: none; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body { margin: 0; background: var(--void); color: var(--ink); font-family: var(--f-ui); font-size: 15px; overflow: hidden;
   user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; touch-action: none; }
@@ -222,7 +223,8 @@ select { background: var(--panel-2); color: var(--ink); border: 1px solid var(--
 .loading .bar i { display: block; height: 100%; width: 0%; background: var(--gold); transition: width 0.2s; }
 .loading p { margin: 0; font-size: 13px; color: var(--ink-dim); letter-spacing: 0.06em; }
 .fatal { position: fixed; inset: 0; display: grid; place-items: center; background: var(--void); z-index: 9; padding-inline: 16px; text-align: center; }
-.fatal div { max-width: 46ch; display: grid; gap: 10px; }
+.fatal > div { max-width: 46ch; display: grid; gap: 12px; justify-items: center; }
+.fatal .detail { font-size: 12px; color: var(--ink-faint); user-select: text; -webkit-user-select: text; overflow-wrap: anywhere; }
 .fatal h2 { margin: 0; font-family: var(--f-display); font-weight: 400; letter-spacing: 0.16em; color: var(--gold); font-size: 16px; }
 .fatal p { margin: 0; color: var(--ink-dim); line-height: 1.5; }
 
@@ -311,6 +313,9 @@ select { background: var(--panel-2); color: var(--ink); border: 1px solid var(--
   #hud-bc .weapons { display: none; }
   .speed { top: calc(50% + 40px); }
   .prompt { bottom: calc(240px + var(--sa-b)); }
+}
+@media (pointer: coarse) and (orientation: landscape) {
+  .prompt { bottom: auto; top: calc(70px + var(--sa-t)); }
 }
 @media (pointer: coarse) and (max-height: 520px) {
   .tbtns { transform: scale(0.88); transform-origin: right bottom; }
@@ -409,6 +414,8 @@ select { background: var(--panel-2); color: var(--ink); border: 1px solid var(--
         </select>
       </label>
       <button id="btn-snd-title" class="chip">Sound: on</button>
+      <button id="btn-fs-title" class="chip" hidden>Full screen</button>
+      <button id="btn-safe-off" class="chip" hidden>Safe graphics on · turn off</button>
     </div>
     <p id="rotate-hint" class="hint" hidden>Turn your phone sideways for the widest view.</p>
   </div>
@@ -481,6 +488,7 @@ select { background: var(--panel-2); color: var(--ink); border: 1px solid var(--
       <div class="setrow"><label for="opt-vol">Sound effects</label><input id="opt-vol" type="range" min="0" max="1" step="0.05" value="0.8"></div>
       <div class="setrow"><label for="opt-mus">Music</label><input id="opt-mus" type="range" min="0" max="1" step="0.05" value="0.6"></div>
       <div class="setrow"><span>Screen shake and flashes</span><button id="opt-shake" class="toggle">On</button></div>
+      <div class="setrow"><span>Full screen</span><button id="opt-fs" class="toggle">Off</button></div>
     </div>
     <div id="tab-controls" class="tabbody" hidden></div>
     <div class="panel-foot">
@@ -555,7 +563,12 @@ select { background: var(--panel-2); color: var(--ink); border: 1px solid var(--
     <p id="ld-text">Charting the galaxy</p>
   </div>
 </div>
-<div id="fatal" class="fatal" hidden><div><h2>Can’t start the engine</h2><p id="fatal-text">This browser can’t run WebGL 2, which the game needs. Try a recent version of Chrome, Safari, Firefox or Edge.</p></div></div>
+<div id="fatal" class="fatal" hidden><div>
+  <h2>Can’t start the engine</h2>
+  <p id="fatal-text">This browser can’t run WebGL 2, which the game needs. Try a recent version of Chrome, Safari, Firefox or Edge.</p>
+  <div class="row"><button id="fatal-reload" class="btn primary">Reload</button><button id="fatal-safe" class="btn">Start in safe mode</button></div>
+  <p id="fatal-detail" class="detail"></p>
+</div></div>
 <script>
 (() => {
 // ==== 00_util.js ====
@@ -871,24 +884,42 @@ const AXIS_X = new V3(1, 0, 0), AXIS_Y = new V3(0, 1, 0), AXIS_Z = new V3(0, 0, 
 // ==== 01_gl.js ====
 // ───────────────────────────── WebGL2 core ─────────────────────────────
 const canvas = document.getElementById('game');
-let gl = null;
-try {
-  gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: true, stencil: false, premultipliedAlpha: false, powerPreference: 'high-performance', preserveDrawingBuffer: false });
-} catch (e) { gl = null; }
+let gl = null, glFail = '';
+// Try progressively plainer context settings: some Android drivers refuse particular combinations.
+for (const opts of [
+  { antialias: false, alpha: false, depth: true, stencil: false, premultipliedAlpha: false, powerPreference: 'high-performance', preserveDrawingBuffer: false },
+  { antialias: false, alpha: false, depth: true, stencil: false, powerPreference: 'default' },
+  {},
+]) {
+  try { gl = canvas.getContext('webgl2', opts); } catch (e) { gl = null; glFail = String(e && e.message || e); }
+  if (gl) break;
+}
+if (!gl && !glFail) {
+  glFail = !window.WebGL2RenderingContext ? 'This browser has no WebGL 2 support.' : 'WebGL 2 is turned off or blocked for this device’s graphics driver.';
+  try { const c1 = document.createElement('canvas'); if (c1.getContext('webgl')) glFail += ' (WebGL 1 works, so hardware acceleration is on.)'; else glFail += ' Hardware acceleration may be switched off.'; } catch (e) { /* ignore */ }
+}
 
-const GLX = { hdr: false, maxSamples: 0, aniso: null, maxAniso: 1 };
+const GLX = { hdr: false, maxSamples: 0, aniso: null, maxAniso: 1, renderer: '', vendor: '', safe: false };
+function gpuName() {
+  if (!gl) return 'unknown';
+  try {
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    return String(ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)) || 'unknown';
+  } catch (e) { return 'unknown'; }
+}
 const ATTR = { a_pos: 0, a_nrm: 1, a_uv: 2, a_col: 3, i_a: 4, i_b: 5, i_c: 6, i_d: 7 };
 const GLSL_HEAD = '#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\nprecision highp samplerCube;\n';
 
 function glInit() {
   if (!gl) return false;
+  GLX.renderer = gpuName();
   const e1 = gl.getExtension('EXT_color_buffer_float');
   const e2 = e1 ? null : gl.getExtension('EXT_color_buffer_half_float');
   gl.getExtension('OES_texture_float_linear');
   GLX.aniso = gl.getExtension('EXT_texture_filter_anisotropic');
   if (GLX.aniso) GLX.maxAniso = gl.getParameter(GLX.aniso.MAX_TEXTURE_MAX_ANISOTROPY_EXT) || 1;
   GLX.maxSamples = gl.getParameter(gl.MAX_SAMPLES) || 0;
-  GLX.hdr = !!(e1 || e2);
+  GLX.hdr = !!(e1 || e2) && !GLX.safe;
   if (GLX.hdr) { // verify half-float render targets actually work
     const t = makeTarget(4, 4, { hdr: true });
     GLX.hdr = t.ok; freeTarget(t);
@@ -908,7 +939,41 @@ function compileShader(type, src, name) {
   return s;
 }
 
+// Rewrite fbm(x, N) / ridged(x, N) calls with literal octave counts into fixed-length versions
+// (fbmN / ridgedN). Mobile GPU compilers unroll loops; a fixed bound keeps each program small.
+function specializeOctaves(src) {
+  if (src.indexOf('//@OCTAVES') < 0) return src;
+  const used = { fbm: new Set(), ridged: new Set() };
+  const spec = (str) => {
+    let out = '', i = 0;
+    const re = /\b(fbm|ridged)\s*\(/g;
+    let m;
+    while ((m = re.exec(str))) {
+      const fn = m[1], open = m.index + m[0].length;
+      let depth = 1, j = open, lastComma = -1;
+      for (; j < str.length; j++) {
+        const ch = str[j];
+        if (ch === '(') depth++;
+        else if (ch === ')') { if (--depth === 0) break; }
+        else if (ch === ',' && depth === 1) lastComma = j;
+      }
+      const oct = lastComma > 0 ? str.slice(lastComma + 1, j).trim() : '';
+      if (!/^\d+$/.test(oct)) { re.lastIndex = open; continue; } // definition or dynamic call: leave it
+      used[fn].add(+oct);
+      out += str.slice(i, m.index) + fn + oct + '(' + spec(str.slice(open, lastComma)) + ')';
+      i = j + 1; re.lastIndex = j + 1;
+    }
+    return out + str.slice(i);
+  };
+  let body = spec(src.replace(/\/\/@GENERIC_BEGIN[\s\S]*?\/\/@GENERIC_END/, ''));
+  let defs = '';
+  for (const n of [...used.fbm].sort()) defs += `float fbm${n}(vec3 p){ float s = 0.0, a = 0.5; for (int i = 0; i < ${n}; i++) { s += a * snoise(p); p = p * 2.02 + vec3(17.1, 5.3, 9.7); a *= 0.5; } return s; }\n`;
+  for (const n of [...used.ridged].sort()) defs += `float ridged${n}(vec3 p){ float s = 0.0, a = 0.5, w = 1.0; for (int i = 0; i < ${n}; i++) { float n = 1.0 - abs(snoise(p)); n *= n; n *= w; w = clamp(n * 1.6, 0.0, 1.0); s += a * n; p = p * 2.1 + vec3(3.7, 11.2, 7.9); a *= 0.5; } return s; }\n`;
+  return body.replace('//@OCTAVES', defs);
+}
+
 function makeProgram(name, vs, fs, defines = '') {
+  vs = specializeOctaves(vs); fs = specializeOctaves(fs);
   const vsrc = GLSL_HEAD + defines + vs, fsrc = GLSL_HEAD + defines + fs;
   const v = compileShader(gl.VERTEX_SHADER, vsrc, name + '.vs');
   const f = compileShader(gl.FRAGMENT_SHADER, fsrc, name + '.fs');
@@ -1142,6 +1207,7 @@ float snoise(vec3 v){
   m = m * m;
   return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
 }
+//@GENERIC_BEGIN
 float fbm(vec3 p, int oct){
   float s = 0.0, a = 0.5;
   for (int i = 0; i < 10; i++) { if (i >= oct) break; s += a * snoise(p); p = p * 2.02 + vec3(17.1, 5.3, 9.7); a *= 0.5; }
@@ -1152,6 +1218,8 @@ float ridged(vec3 p, int oct){
   for (int i = 0; i < 10; i++) { if (i >= oct) break; float n = 1.0 - abs(snoise(p)); n *= n; n *= w; w = clamp(n * 1.6, 0.0, 1.0); s += a * n; p = p * 2.1 + vec3(3.7, 11.2, 7.9); a *= 0.5; }
   return s;
 }
+//@GENERIC_END
+//@OCTAVES
 vec3 hash33(vec3 p3){ p3 = fract(p3 * vec3(0.1031, 0.1030, 0.0973)); p3 += dot(p3, p3.yxz + 33.33); return fract((p3.xxy + p3.yxx) * p3.zyx); }
 float hash13(vec3 p3){ p3 = fract(p3 * 0.1031); p3 += dot(p3, p3.zyx + 31.32); return fract((p3.x + p3.y) * p3.z); }
 float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
@@ -1532,10 +1600,12 @@ void main(){
   vec3 alb = pow(t.rgb, vec3(2.2));
   vec3 Ng = normalize(v_nrm);
   vec3 N = Ng;
+#ifndef LITE
   if (u_detail > 0.01) {
     float dn = snoise(v_opos * 60.0) * 0.5 + snoise(v_opos * 150.0) * 0.3;
     alb *= 1.0 + dn * 0.14 * u_detail;
   }
+#endif
   if (u_amode == 2 && u_bump > 0.001) {
     float hu = texture(u_map, v_uv + vec2(u_texel.x, 0.0)).a;
     float hv = texture(u_map, v_uv + vec2(0.0, u_texel.y)).a;
@@ -1631,8 +1701,12 @@ in vec3 v_opos; in vec3 v_nrm; in vec3 v_wpos; out vec4 o;
 void main(){
   if (u_dark > 0.5) { o = vec4(0.0, 0.0, 0.0, 1.0); return; }
   vec3 p = normalize(v_opos);
+#ifdef LITE
+  float n = 0.6, g = 0.5;
+#else
   float n = fbm(p * 5.0 + vec3(0.0, u_time * 0.03, u_time * 0.02), 4) * 0.5 + 0.5;
   float g = snoise(p * 22.0 + vec3(u_time * 0.08)) * 0.5 + 0.5;
+#endif
   float v = n * 0.72 + g * 0.28;
   vec3 V = normalize(-v_wpos);
   float mu = max(dot(normalize(v_nrm), V), 0.0);
@@ -1658,8 +1732,12 @@ void main(){
   float spd = 0.9 / pow(rad, 1.5);
   float a2 = ang - u_time * spd;
   vec3 q = vec3(cos(a2) * rad, sin(a2) * rad, r * 2.0);
+#ifdef LITE
+  float n = 0.5 + 0.5 * sin(a2 * 3.0 + rad * 4.0), fil = 0.6;
+#else
   float n = fbm(q * 1.7 + vec3(0.0, 0.0, u_time * 0.04), 5) * 0.5 + 0.5;
   float fil = fbm(vec3(cos(a2) * rad * 3.0, sin(a2) * rad * 3.0, r * 14.0), 3) * 0.5 + 0.5;
+#endif
   float dens = smoothstep(0.0, 0.06, r) * pow(1.0 - r, 1.3) * (0.25 + 0.95 * n) * (0.7 + 0.5 * fil);
   vec3 hot = vec3(1.0, 0.92, 0.85) * 4.2, mid = vec3(1.0, 0.5, 0.14) * 2.2, cool = vec3(0.55, 0.1, 0.04);
   vec3 col = mix(hot, mid, smoothstep(0.0, 0.3, r));
@@ -1840,6 +1918,50 @@ void main(){
   col = pow(clamp(col, 0.0, 1.0), vec3(1.0 / 2.2));
   col += (hash12(gl_FragCoord.xy + fract(u_time * 7.0) * 113.0) - 0.5) / 200.0;
   o = vec4(col, 1.0);
+}`;
+
+
+// ─── per-type planet bake programs ───
+// One small program per planet type instead of a single program containing all 17 types:
+// Android GPU drivers (Adreno, Mali) can fail or stall compiling the combined version.
+function glslExtract(src, sig) {
+  const i = src.indexOf(sig);
+  if (i < 0) throw new Error('GLSL function not found: ' + sig);
+  let j = src.indexOf('{', i), depth = 0;
+  for (; j < src.length; j++) { if (src[j] === '{') depth++; else if (src[j] === '}' && --depth === 0) break; }
+  return src.slice(i, j + 1);
+}
+SH.bakeTypeFn = ['tTerran', 'tDesert', 'tIce', 'tLava', 'tGas', 'tToxic', 'tCrystal', 'tTerran', 'tTerran', 'tBarren', 'tIron', 'tBio', 'tMachine', 'tStorm', 'tIceGiant', 'tSulfur', 'tShattered', 'tTerran', 'tRogue'];
+SH.bakeFallbackFn = `vec4 tFallback(vec3 d, vec3 p){
+  float h = fbm(p * 1.3, 4); float b = fbm(p * 3.0 + 7.0, 3);
+  vec3 col = mix(u_c[0], u_c[1], smoothstep(-0.4, 0.4, h));
+  col = mix(col, u_c[2], smoothstep(0.1, 0.6, b) * 0.5);
+  return vec4(col, 0.35);
+}`;
+SH.bakeSource = (fn) => {
+  const src = SH.planetBakeFS;
+  const head = src.slice(0, src.indexOf('float craters('));
+  const dir = 'void main(){\n  float phi = v_uv.x * 6.28318530718;\n  float th = (1.0 - v_uv.y) * 3.14159265359;\n  vec3 d = vec3(-cos(phi) * sin(th), cos(th), sin(phi) * sin(th));\n';
+  if (fn === 'clouds') return head + glslExtract(src, 'float cloudsF(') + '\n' + dir + '  float c = cloudsF(d); o = vec4(c, c, c, 1.0);\n}';
+  const body = fn === 'tFallback' ? SH.bakeFallbackFn
+    : (['tBarren', 'tIron', 'tShattered'].includes(fn) ? glslExtract(src, 'float craters(') + '\n' : '') + glslExtract(src, 'vec4 ' + fn + '(');
+  return head + body + '\n' + dir + '  vec3 p = d * u_p2.z + u_seed;\n  vec4 r = ' + fn + '(d, p);\n  o = vec4(pow(clamp(r.rgb, 0.0, 1.0), vec3(1.0 / 2.2)), clamp(r.a, 0.0, 1.0));\n}';
+};
+// simpler sky used only if the full nebula shader cannot compile on a device
+SH.skyBakeFallbackFS = SH.noise + `
+uniform int u_face; uniform vec3 u_core; uniform vec3 u_seed;
+in vec2 v_uv; out vec4 o;
+` + glslExtract(SH.skyBakeFS, 'vec3 faceDir(') + '\n' + glslExtract(SH.skyBakeFS, 'float starLayer(') + `
+void main(){
+  vec3 d = normalize(faceDir(u_face, v_uv));
+  float band = exp(-d.y * d.y * 9.0);
+  float core = pow(max(dot(d, u_core), 0.0), 3.0);
+  float n = fbm(d * 2.0 + u_seed, 4) * 0.5 + 0.5;
+  vec3 col = mix(vec3(0.40, 0.46, 0.78), vec3(1.0, 0.76, 0.48), core) * band * (0.03 + 0.18 * core) * n;
+  col += mix(vec3(0.6, 0.08, 0.42), vec3(0.06, 0.26, 0.74), n) * smoothstep(0.55, 0.85, n) * 0.08;
+  col += vec3(0.85, 0.9, 1.0) * (starLayer(d, 190.0, 0.2 + band * 0.45) * 0.45 + starLayer(d, 420.0, 0.12 + band * 0.55) * 0.3) * (0.45 + band);
+  col += vec3(0.003, 0.0035, 0.008);
+  o = vec4(pow(clamp(col, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0);
 }`;
 
 // ==== 03_geo.js ====
@@ -2108,7 +2230,9 @@ function toTyped(g) {
 const QUALITY = {
   high: { label: 'High', dpr: 2, scale: 1, msaa: 4, bloom: true, levels: 6, planetTex: 2048, sky: 1024, stars: 7000, fx: 1 },
   medium: { label: 'Medium', dpr: 1.5, scale: 1, msaa: 4, bloom: true, levels: 5, planetTex: 1024, sky: 768, stars: 5000, fx: 0.85 },
-  low: { label: 'Low', dpr: 1, scale: 0.8, msaa: 0, bloom: false, levels: 4, planetTex: 512, sky: 512, stars: 3500, fx: 0.6 },
+  low: { label: 'Low', dpr: 1, scale: 0.85, msaa: 0, bloom: true, levels: 4, planetTex: 512, sky: 512, stars: 3500, fx: 0.6 },
+  // only used in safe mode (after a graphics failure): plainest settings that still look like the game
+  safe: { label: 'Safe', dpr: 1, scale: 0.75, msaa: 0, bloom: false, levels: 0, planetTex: 512, sky: 384, stars: 2500, fx: 0.5 },
 };
 
 class FXBatch {
@@ -2153,14 +2277,13 @@ const R = {
     this.setQuality(qName, true);
     const P = this.P, fv = SH.fsVS;
     P.sky = makeProgram('sky', fv, SH.skyFS);
-    P.skyBake = makeProgram('skyBake', fv, SH.skyBakeFS);
     P.stars = makeProgram('stars', SH.starsVS, SH.starsFS);
-    P.planetBake = makeProgram('planetBake', fv, SH.planetBakeFS);
-    P.planet = makeProgram('planet', SH.planetVS, SH.planetFS);
+    // planet-surface and sky bake programs compile on demand (see bakeProg / bakeSkyStart)
+    P.planet = this.tryProgram('planet', SH.planetVS, SH.planetFS);
     P.atmo = makeProgram('atmo', SH.atmoVS, SH.atmoFS);
     P.ring = makeProgram('ring', SH.ringVS, SH.ringFS);
-    P.sun = makeProgram('sun', SH.sunVS, SH.sunFS);
-    P.disk = makeProgram('disk', SH.diskVS, SH.diskFS);
+    P.sun = this.tryProgram('sun', SH.sunVS, SH.sunFS);
+    P.disk = this.tryProgram('disk', SH.diskVS, SH.diskFS);
     P.hull = makeProgram('hull', SH.hullVS, SH.hullFS);
     P.hullI = makeProgram('hullI', SH.hullVS, SH.hullFS, '#define INST 1\n');
     P.fx = makeProgram('fx', SH.fxVS, SH.fxFS);
@@ -2226,7 +2349,27 @@ const R = {
     this.starPts = makeMesh({ pos, col }, gl.POINTS);
   },
 
-  bakeSky(size, core, seed) {
+  // compile; if the device's driver rejects the full shader, retry a simpler variant
+  tryProgram(name, vs, fs) {
+    try { return makeProgram(name, vs, fs); }
+    catch (e) { console.warn(name + ': full shader failed, using simpler version', e); this.fallbacks.push(name); return makeProgram(name + '-lite', vs, fs, '#define LITE 1\n'); }
+  },
+  fallbacks: [], bakeProgs: {},
+  bakeProg(fn) {
+    if (fn in this.bakeProgs) return this.bakeProgs[fn];
+    let pr = null;
+    try { pr = makeProgram('bake-' + fn, SH.fsVS, SH.bakeSource(fn)); }
+    catch (e) {
+      console.warn('Planet shader ' + fn + ' failed on this device; using a simpler surface', e);
+      this.fallbacks.push(fn);
+      if (fn !== 'tFallback' && fn !== 'clouds') pr = this.bakeProg('tFallback');
+    }
+    this.bakeProgs[fn] = pr;
+    return pr;
+  },
+
+  // sky cube map, baked one face per call so no single GPU submission runs long
+  bakeSkyStart(size, core, seed) {
     if (this.skyTex) gl.deleteTexture(this.skyTex);
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_CUBE_MAP, tex);
@@ -2235,54 +2378,68 @@ const R = {
     gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    const fb = gl.createFramebuffer();
-    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-    const P = useProg(this.P.skyBake);
-    U.v3(P, 'u_core', core.x, core.y, core.z); U.v3(P, 'u_seed', seed[0], seed[1], seed[2]);
-    gl.viewport(0, 0, size, size);
+    let prog = null;
+    try { prog = this.P.skyBake || (this.P.skyBake = makeProgram('skyBake', SH.fsVS, SH.skyBakeFS)); }
+    catch (e) { console.warn('Sky shader failed; using a simpler sky', e); this.fallbacks.push('sky'); prog = this.P.skyBake = makeProgram('skyBake-lite', SH.fsVS, SH.skyBakeFallbackFS); }
+    this.skyTex = tex;
+    this._sky = { tex, size, core, seed, prog, fb: gl.createFramebuffer() };
+  },
+  bakeSkyFace(f) {
+    const S = this._sky;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, S.fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_CUBE_MAP_POSITIVE_X + f, S.tex, 0);
+    const P = useProg(S.prog);
+    U.v3(P, 'u_core', S.core.x, S.core.y, S.core.z); U.v3(P, 'u_seed', S.seed[0], S.seed[1], S.seed[2]);
+    gl.viewport(0, 0, S.size, S.size);
     setBlend(0); setDepth(false, false); setCull(0);
-    for (let f = 0; f < 6; f++) {
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_CUBE_MAP_POSITIVE_X + f, tex, 0);
-      U.i(P, 'u_face', f);
-      drawFullscreen();
-    }
+    U.i(P, 'u_face', f);
+    drawFullscreen();
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.deleteFramebuffer(fb);
-    gl.bindTexture(gl.TEXTURE_CUBE_MAP, tex);
+    gl.flush();
+  },
+  bakeSkyEnd() {
+    const S = this._sky;
+    gl.deleteFramebuffer(S.fb);
+    gl.bindTexture(gl.TEXTURE_CUBE_MAP, S.tex);
     while (gl.getError() !== gl.NO_ERROR) { /* clear */ }
     gl.generateMipmap(gl.TEXTURE_CUBE_MAP);
     this.skyHasMips = gl.getError() === gl.NO_ERROR;
     gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, this.skyHasMips ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR);
-    this.skyTex = tex;
+    this._sky = null;
   },
+  bakeSky(size, core, seed) { this.bakeSkyStart(size, core, seed); for (let f = 0; f < 6; f++) this.bakeSkyFace(f); this.bakeSkyEnd(); },
 
   // bake a planet surface (and optional cloud layer); returns textures
   bakePlanet(pd, size) {
     const W = size, H = size >> 1;
+    const prog = this.bakeProg(SH.bakeTypeFn[pd.typeId] || 'tRogue');
+    if (!prog) return { tex: null, cloud: null, w: 0, h: 0 };
     const T = makeTarget(W, H, { mips: true, repeatS: true });
-    const P = useProg(this.P.planetBake);
+    const flat = new Float32Array(18);
+    for (let i = 0; i < 6; i++) { const c = pd.pal[Math.min(i, pd.pal.length - 1)]; flat[i * 3] = c[0]; flat[i * 3 + 1] = c[1]; flat[i * 3 + 2] = c[2]; }
+    const setU = (P) => {
+      U.v3(P, 'u_seed', pd.seed[0], pd.seed[1], pd.seed[2]);
+      if (P.u.u_c) gl.uniform3fv(P.u.u_c, flat);
+      U.v4(P, 'u_p', pd.p[0], pd.p[1], pd.p[2], pd.p[3]);
+      U.v4(P, 'u_p2', pd.p2[0], pd.p2[1], pd.p2[2], pd.p2[3]);
+      U.v3(P, 'u_spot', pd.spot[0], pd.spot[1], pd.spot[2]);
+    };
     gl.bindFramebuffer(gl.FRAMEBUFFER, T.fb);
     gl.viewport(0, 0, W, H);
     setBlend(0); setDepth(false, false); setCull(0);
-    U.i(P, 'u_type', pd.typeId); U.i(P, 'u_mode', 0);
-    U.v3(P, 'u_seed', pd.seed[0], pd.seed[1], pd.seed[2]);
-    const flat = new Float32Array(18);
-    for (let i = 0; i < 6; i++) { const c = pd.pal[Math.min(i, pd.pal.length - 1)]; flat[i * 3] = c[0]; flat[i * 3 + 1] = c[1]; flat[i * 3 + 2] = c[2]; }
-    if (P.u.u_c) gl.uniform3fv(P.u.u_c, flat);
-    U.v4(P, 'u_p', pd.p[0], pd.p[1], pd.p[2], pd.p[3]);
-    U.v4(P, 'u_p2', pd.p2[0], pd.p2[1], pd.p2[2], pd.p2[3]);
-    U.v3(P, 'u_spot', pd.spot[0], pd.spot[1], pd.spot[2]);
+    setU(useProg(prog));
     drawFullscreen();
     gl.bindTexture(gl.TEXTURE_2D, T.tex);
     gl.generateMipmap(gl.TEXTURE_2D);
     if (GLX.aniso) gl.texParameterf(gl.TEXTURE_2D, GLX.aniso.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(4, GLX.maxAniso));
     let cloud = null;
-    if (pd.clouds) {
+    const cprog = pd.clouds ? this.bakeProg('clouds') : null;
+    if (cprog) {
       cloud = makeTarget(W, H, { mips: true, repeatS: true, internal: gl.R8, format: gl.RED, type: gl.UNSIGNED_BYTE });
       if (!cloud.ok) { freeTarget(cloud); cloud = makeTarget(W, H, { mips: true, repeatS: true }); }
       gl.bindFramebuffer(gl.FRAMEBUFFER, cloud.fb);
       gl.viewport(0, 0, W, H);
-      U.i(P, 'u_mode', 1);
+      setU(useProg(cprog));
       drawFullscreen();
       gl.bindTexture(gl.TEXTURE_2D, cloud.tex);
       gl.generateMipmap(gl.TEXTURE_2D);
@@ -2291,6 +2448,7 @@ const R = {
     // keep only textures; framebuffers can go
     gl.deleteFramebuffer(T.fb);
     if (cloud) gl.deleteFramebuffer(cloud.fb);
+    gl.flush();
     return { tex: T.tex, cloud: cloud ? cloud.tex : null, w: W, h: H };
   },
 
@@ -3098,8 +3256,10 @@ const World = {
   },
   bake(b) {
     const size = b.parent ? Math.max(256, R.q.planetTex >> 1) : (b.r > 600 ? R.q.planetTex : Math.max(512, R.q.planetTex));
-    const res = R.bakePlanet(b, size);
-    b.tex = res.tex; b.cloudTex = res.cloud; b.texW = res.w; b.texH = res.h;
+    try {
+      const res = R.bakePlanet(b, size);
+      b.tex = res.tex; b.cloudTex = res.cloud; b.texW = res.w; b.texH = res.h;
+    } catch (e) { console.warn('Could not paint ' + b.name, e); }
   },
 
   update(dt, focus) {
@@ -6241,7 +6401,7 @@ const Game = {
     for (const z of this.zones.values()) { z.active = false; z.spawnT = -999; z.pickT = -999; }
     this.started = true; this.bossActive = false; this.autopilot = false; this.wp = null; this.warping = false;
     const st = this.station(this.home) || World.systems[0].stations[0];
-    World.load(st.sys, true);
+    World.load(st.sys, false);
     for (const s of World.systems) if (s !== st.sys && s.loaded && s.pos.dist(st.pos) > 44000) World.unload(s);
     Player.alive = true; Player.invuln = 3;
     Player.placeAt(_v1.copy(st.gate).addScaled(st.gateDir, 90), st.gateDir);
@@ -6303,12 +6463,26 @@ const Game = {
     UI.syncSettings();
   },
   autoQuality() {
+    if (GLX.safe) return 'safe';
+    if (/Android/i.test(navigator.userAgent)) return this.androidTier(GLX.renderer || gpuName());
+    // iPhone and iPad (and other touch devices): unchanged
     if (Input.touchMode || (window.matchMedia && matchMedia('(pointer: coarse)').matches)) return 'medium';
     let ren = '';
     try { const ext = gl.getExtension('WEBGL_debug_renderer_info'); ren = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : ''; } catch (e) { ren = ''; }
     if (/swiftshader|llvmpipe|software|mali|adreno|powervr/i.test(ren)) return 'low';
     if (/intel|mesa/i.test(ren) && !/arc/i.test(ren)) return 'medium';
     return 'high';
+  },
+
+  // Android GPUs vary enormously. Flagship-class GPUs get the same Medium settings as iPhone;
+  // everything else starts on Low (still with glow effects). Frame-rate monitoring adjusts from there.
+  androidTier(ren) {
+    const r = String(ren).toLowerCase();
+    let m;
+    if ((m = r.match(/adreno[^0-9]*(\d{3})/))) return +m[1] >= 640 ? 'medium' : 'low';
+    if (/immortalis|xclipse/.test(r)) return 'medium';
+    if ((m = r.match(/mali-g(\d+)/))) { const n = +m[1]; return (n >= 76 && n <= 79) || n >= 710 ? 'medium' : 'low'; }
+    return 'low';
   },
 
   // ─── stations ───
@@ -6599,7 +6773,7 @@ const Game = {
       R.post.flash = smooth(0.8, 1.35, W.t) * 0.95; R.post.ab = 0.025 * Math.min(1, W.t);
       if (W.t > 1.4) {
         const s = W.sys, st = s.stations[0];
-        World.load(s, true);
+        World.load(s, false);
         const out = _v2.subVectors(st.pos, s.bh ? s.pos : s.starPos).normalize();
         const arr = st.pos.clone().addScaled(out, 1700).add(new V3(0, 220, 0));
         _v4.subVectors(st.pos, arr).normalize();
@@ -6636,7 +6810,7 @@ const Game = {
     if (Player.alive) return;
     const st = this.station(this.home) || World.systems[0].stations[0];
     const P = Player;
-    World.load(st.sys, true);
+    World.load(st.sys, false);
     P.alive = true; P.hp = P.maxHp; P.shield = P.maxShield; P.energy = P.maxEnergy; P.missiles = Math.max(P.missiles, Math.round(P.maxMissiles / 2));
     P.invuln = 4;
     P.placeAt(_v1.copy(st.gate).addScaled(st.gateDir, 90), st.gateDir);
@@ -6798,35 +6972,63 @@ const Game = {
 };
 
 // ───────────────────────────── boot ─────────────────────────────
-function fatal(msg) {
+const SAFE_KEY = 'starlight-voyager-safe';
+function browserName() {
+  const ua = navigator.userAgent;
+  const os = (ua.match(/Android [\d.]+/) || ua.match(/(iPhone|iPad)[^;)]*/) || ua.match(/Windows NT [\d.]+|Mac OS X [\d_]+|Linux/) || ['unknown OS'])[0];
+  const br = (ua.match(/SamsungBrowser\/[\d.]+|EdgA?\/[\d.]+|Firefox\/[\d.]+|OPR\/[\d.]+|Chrome\/[\d.]+|Version\/[\d.]+ (Mobile\/\w+ )?Safari/) || ['unknown browser'])[0];
+  return os.replace(/_/g, '.') + ' · ' + br;
+}
+function fatal(msg, err) {
   $('loading').hidden = true;
   if (msg) $('fatal-text').textContent = msg;
+  const detail = 'Graphics: ' + (GLX.renderer || gpuName()) + ' · ' + browserName() + (err ? ' · ' + (err.message || err) : '');
+  $('fatal-detail').textContent = detail;
+  let safe = false; try { safe = localStorage.getItem(SAFE_KEY) === '1'; } catch (e) { /* ignore */ }
+  $('fatal-safe').hidden = safe || !gl;
   $('fatal').hidden = false;
+  console.warn('Starlight Voyager stopped: ' + detail);
 }
 function boot(hotData) {
   if (hotData && hotData.save) Game._hotSave = hotData.save;
-  if (!glInit()) { fatal(); return; }
+  $('fatal-reload').addEventListener('click', () => location.reload());
+  $('fatal-safe').addEventListener('click', () => { try { localStorage.setItem(SAFE_KEY, '1'); } catch (e) { /* ignore */ } location.reload(); });
+  try { GLX.safe = localStorage.getItem(SAFE_KEY) === '1'; } catch (e) { GLX.safe = false; }
+  if (location.hash.includes('safe')) GLX.safe = true;
+  if (!glInit()) { fatal(glFail ? 'This device can’t start WebGL 2, which the game needs. ' + glFail + ' Updating Chrome, or turning on hardware acceleration, usually fixes this.' : null); return; }
   Game.loadSettings();
   const testMode = location.hash.includes('test');
   if (testMode) { for (const k in QUALITY) { QUALITY[k].planetTex = 512; QUALITY[k].sky = 256; QUALITY[k].msaa = 0; } }
+  const home = () => World.systems[0];
+  // GPU-heavy work is split into small steps (one sky face or one planet each) so no single
+  // submission runs long enough for a mobile GPU watchdog to reset the graphics driver.
   const steps = [
     ['Calibrating instruments', () => { UI.init(); Input.init(); Projs.init(); Dust.init(); DmgNums.init(); }],
-    ['Building the fleet', () => { const q = Game.settings.quality === 'auto' || !QUALITY[Game.settings.quality] ? Game.autoQuality() : Game.settings.quality; R.init(q); buildModels(); R.resize(true); }],
-    ['Painting the nebulae', () => { const home = new V3(...GALAXY[0].pos); R.bakeSky(R.q.sky, home.negate().normalize(), [3.1, 7.7, 1.3]); }],
-    ['Charting the galaxy', () => { World.build(); World.onLoad = (s) => Game.onSystemLoad(s); document.querySelector('.title-wrap .eyebrow').textContent = `${World.systems.length} star systems · ${World.allBodies().length} worlds`; }],
-    ['Forming planets', () => { World.load(World.systems[0], true); World.update(0.001, World.systems[0].stations[0].pos); }],
+    ['Building the fleet', () => { const q = GLX.safe ? 'safe' : (Game.settings.quality === 'auto' || !QUALITY[Game.settings.quality] ? Game.autoQuality() : Game.settings.quality); R.init(q); buildModels(); R.resize(true); }],
+    ['Painting the nebulae', () => { const h = new V3(...GALAXY[0].pos); R.bakeSkyStart(R.q.sky, h.negate().normalize(), [3.1, 7.7, 1.3]); }],
   ];
-  let i = 0;
+  for (let f = 0; f < 6; f++) steps.push(['Painting the nebulae', () => { R.bakeSkyFace(f); if (f === 5) R.bakeSkyEnd(); }]);
+  steps.push(['Charting the galaxy', () => {
+    World.build(); World.onLoad = (sys) => Game.onSystemLoad(sys);
+    document.querySelector('.title-wrap .eyebrow').textContent = `${World.systems.length} star systems · ${World.allBodies().length} worlds`;
+    World.load(home(), false);
+    const n = World.bakeQueue.length;
+    for (let k = 0; k < n; k++) steps.splice(i + 1 + k, 0, [`Forming planets ${k + 1} / ${n}`, () => { const b = World.bakeQueue.shift(); if (b) World.bake(b); }]);
+  }]);
+  steps.push(['Ready', () => { World.update(0.001, home().stations[0].pos); }]);
+  let i = 0, total = steps.length;
   const bar = $('ld-bar'), txt = $('ld-text');
   const next = () => {
     if (i >= steps.length) return done();
+    total = Math.max(total, steps.length);
     const [label, fn] = steps[i];
     txt.textContent = label;
-    bar.style.width = Math.round(i / steps.length * 100) + '%';
+    bar.style.width = Math.round(i / total * 100) + '%';
     setTimeout(() => {
-      try { fn(); } catch (e) { console.error(e); fatal('The game failed to start: ' + (e && e.message ? e.message : e)); return; }
+      if (gl.isContextLost()) { fatal('The graphics driver stopped while the game was loading. Try safe mode, which uses lighter graphics.'); return; }
+      try { fn(); } catch (e) { console.error(e); fatal('The game failed to start. Try safe mode, which uses lighter graphics.', e); return; }
       i++; next();
-    }, 30);
+    }, 16);
   };
   const done = () => {
     bar.style.width = '100%';
@@ -6838,11 +7040,14 @@ function boot(hotData) {
     $('loading').hidden = true;
     UI.show('scr-title'); Game.refreshTitle();
     $('rotate-hint').hidden = !(Input.touchMode && innerHeight > innerWidth);
+    $('btn-safe-off').hidden = !GLX.safe;
+    if (R.fallbacks.length) console.warn('Simplified shaders in use on this device: ' + R.fallbacks.join(', '));
     Game._last = performance.now();
     requestAnimationFrame((t) => Game.frame(t));
     window.__ready = true;
     if (testMode) {
       Game.perf.cool = 1e9;
+      window.__SH = SH; window.__spec = specializeOctaves;
       window.__G = { Game, Player, World, Enemies, Items, Projs, R, UI, Input, Parts, Cam, V3, Quat, Sound, BOSSES, WEAPONS, ETYPES, Boss,
         sim(sec, dt = 1 / 30) { for (let t = 0; t < sec; t += dt) { if (Game.state === 'play' || Game.state === 'dead') Game.update(dt); Game.updatePost(dt); } if (Game.state === 'play' || Game.state === 'dead') UI.update(dt); return Game.state; } };
     }
@@ -6859,7 +7064,24 @@ function boot(hotData) {
   $('btn-snd-title').addEventListener('click', () => { Game.settings.sound = !Game.settings.sound; Sound.init(); Sound.setOn(Game.settings.sound); Game.saveSettings(); UI.syncSettings(); });
   document.addEventListener('visibilitychange', () => { if (document.hidden) { if (Game.state === 'play') Game.pause(); Game.save(); } });
   window.addEventListener('pagehide', () => Game.save());
-  canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); fatal('The graphics context was lost. Reload the page to continue; your progress was saved.'); Game.save(); });
+  canvas.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault(); Game.save();
+    if (Game.state === 'play') Game.pause();
+    fatal(window.__ready ? 'The graphics driver restarted. Reload to carry on; your progress is saved.' : 'The graphics driver stopped while the game was loading. Try safe mode, which uses lighter graphics.');
+    $('fatal').querySelector('h2').textContent = window.__ready ? 'Graphics paused' : 'Can’t start the engine';
+  });
+  canvas.addEventListener('webglcontextrestored', () => { Game.save(); location.reload(); });
+  window.addEventListener('error', (e) => { if (!window.__ready && $('fatal').hidden) fatal('The game failed to start. Try safe mode, which uses lighter graphics.', e.error || e.message); });
+  $('btn-safe-off').addEventListener('click', () => { try { localStorage.removeItem(SAFE_KEY); } catch (e) { /* ignore */ } location.reload(); });
+  const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const fsOk = !!(document.fullscreenEnabled && document.documentElement.requestFullscreen) && !isIOS;
+  const goFull = (btn) => {
+    if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; }
+    document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => { btn.textContent = 'Full screen isn’t available here'; btn.disabled = true; });
+  };
+  for (const id of ['btn-fs-title', 'opt-fs']) { const b = $(id); b.hidden = !fsOk; b.addEventListener('click', () => goFull(b)); }
+  if (!fsOk) $('opt-fs').closest('.setrow').hidden = true;
+  document.addEventListener('fullscreenchange', () => { const on = !!document.fullscreenElement; $('btn-fs-title').textContent = on ? 'Exit full screen' : 'Full screen'; $('opt-fs').textContent = on ? 'On' : 'Off'; $('opt-fs').classList.toggle('on', on); setTimeout(() => R.resize(true), 100); });
   if (window.claude && window.claude.hot && window.claude.hot.snapshot) window.claude.hot.snapshot(() => ({ save: Game.started ? Game.saveData() : Game.readSave() }));
   next();
 }

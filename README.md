@@ -8,6 +8,8 @@ Open `index.html` in a modern browser (WebGL 2 required). Works with mouse/keybo
 
 To host it, enable GitHub Pages (Settings → Pages → Deploy from branch → `main` / root).
 
+Graphics settings are picked per device: iPhone and iPad use Medium; Android devices are matched by graphics chip (flagship Adreno 640+, Mali-G76–G79/G710+, Immortalis and Xclipse get Medium, others start on Low), and frame-rate monitoring lowers resolution or quality automatically if needed. If the game cannot start, the error screen names the graphics chip and browser and offers a safe mode with lighter graphics.
+
 ## Development
 
 `index.html` is generated. Edit the source, then rebuild:

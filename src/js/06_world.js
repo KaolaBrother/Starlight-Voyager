@@ -289,8 +289,10 @@ const World = {
   },
   bake(b) {
     const size = b.parent ? Math.max(256, R.q.planetTex >> 1) : (b.r > 600 ? R.q.planetTex : Math.max(512, R.q.planetTex));
-    const res = R.bakePlanet(b, size);
-    b.tex = res.tex; b.cloudTex = res.cloud; b.texW = res.w; b.texH = res.h;
+    try {
+      const res = R.bakePlanet(b, size);
+      b.tex = res.tex; b.cloudTex = res.cloud; b.texW = res.w; b.texH = res.h;
+    } catch (e) { console.warn('Could not paint ' + b.name, e); }
   },
 
   update(dt, focus) {

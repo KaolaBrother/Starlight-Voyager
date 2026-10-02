@@ -31,6 +31,7 @@
 [hidden] { display: none !important; }
 *, *::before, *::after { box-sizing: border-box; }
 html, body { height: 100%; }
+html, body { overscroll-behavior: none; }
 html { overflow: hidden; touch-action: none; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body { margin: 0; background: var(--void); color: var(--ink); font-family: var(--f-ui); font-size: 15px; overflow: hidden;
   user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; touch-action: none; }
@@ -211,7 +212,8 @@ select { background: var(--panel-2); color: var(--ink); border: 1px solid var(--
 .loading .bar i { display: block; height: 100%; width: 0%; background: var(--gold); transition: width 0.2s; }
 .loading p { margin: 0; font-size: 13px; color: var(--ink-dim); letter-spacing: 0.06em; }
 .fatal { position: fixed; inset: 0; display: grid; place-items: center; background: var(--void); z-index: 9; padding-inline: 16px; text-align: center; }
-.fatal div { max-width: 46ch; display: grid; gap: 10px; }
+.fatal > div { max-width: 46ch; display: grid; gap: 12px; justify-items: center; }
+.fatal .detail { font-size: 12px; color: var(--ink-faint); user-select: text; -webkit-user-select: text; overflow-wrap: anywhere; }
 .fatal h2 { margin: 0; font-family: var(--f-display); font-weight: 400; letter-spacing: 0.16em; color: var(--gold); font-size: 16px; }
 .fatal p { margin: 0; color: var(--ink-dim); line-height: 1.5; }
 
@@ -300,6 +302,9 @@ select { background: var(--panel-2); color: var(--ink); border: 1px solid var(--
   #hud-bc .weapons { display: none; }
   .speed { top: calc(50% + 40px); }
   .prompt { bottom: calc(240px + var(--sa-b)); }
+}
+@media (pointer: coarse) and (orientation: landscape) {
+  .prompt { bottom: auto; top: calc(70px + var(--sa-t)); }
 }
 @media (pointer: coarse) and (max-height: 520px) {
   .tbtns { transform: scale(0.88); transform-origin: right bottom; }
@@ -398,6 +403,8 @@ select { background: var(--panel-2); color: var(--ink); border: 1px solid var(--
         </select>
       </label>
       <button id="btn-snd-title" class="chip">Sound: on</button>
+      <button id="btn-fs-title" class="chip" hidden>Full screen</button>
+      <button id="btn-safe-off" class="chip" hidden>Safe graphics on · turn off</button>
     </div>
     <p id="rotate-hint" class="hint" hidden>Turn your phone sideways for the widest view.</p>
   </div>
@@ -470,6 +477,7 @@ select { background: var(--panel-2); color: var(--ink); border: 1px solid var(--
       <div class="setrow"><label for="opt-vol">Sound effects</label><input id="opt-vol" type="range" min="0" max="1" step="0.05" value="0.8"></div>
       <div class="setrow"><label for="opt-mus">Music</label><input id="opt-mus" type="range" min="0" max="1" step="0.05" value="0.6"></div>
       <div class="setrow"><span>Screen shake and flashes</span><button id="opt-shake" class="toggle">On</button></div>
+      <div class="setrow"><span>Full screen</span><button id="opt-fs" class="toggle">Off</button></div>
     </div>
     <div id="tab-controls" class="tabbody" hidden></div>
     <div class="panel-foot">
@@ -544,5 +552,10 @@ select { background: var(--panel-2); color: var(--ink); border: 1px solid var(--
     <p id="ld-text">Charting the galaxy</p>
   </div>
 </div>
-<div id="fatal" class="fatal" hidden><div><h2>Can’t start the engine</h2><p id="fatal-text">This browser can’t run WebGL 2, which the game needs. Try a recent version of Chrome, Safari, Firefox or Edge.</p></div></div>
+<div id="fatal" class="fatal" hidden><div>
+  <h2>Can’t start the engine</h2>
+  <p id="fatal-text">This browser can’t run WebGL 2, which the game needs. Try a recent version of Chrome, Safari, Firefox or Edge.</p>
+  <div class="row"><button id="fatal-reload" class="btn primary">Reload</button><button id="fatal-safe" class="btn">Start in safe mode</button></div>
+  <p id="fatal-detail" class="detail"></p>
+</div></div>
 <!--SCRIPT-->

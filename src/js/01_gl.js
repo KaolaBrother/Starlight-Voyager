@@ -1,23 +1,41 @@
 // ───────────────────────────── WebGL2 core ─────────────────────────────
 const canvas = document.getElementById('game');
-let gl = null;
-try {
-  gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: true, stencil: false, premultipliedAlpha: false, powerPreference: 'high-performance', preserveDrawingBuffer: false });
-} catch (e) { gl = null; }
+let gl = null, glFail = '';
+// Try progressively plainer context settings: some Android drivers refuse particular combinations.
+for (const opts of [
+  { antialias: false, alpha: false, depth: true, stencil: false, premultipliedAlpha: false, powerPreference: 'high-performance', preserveDrawingBuffer: false },
+  { antialias: false, alpha: false, depth: true, stencil: false, powerPreference: 'default' },
+  {},
+]) {
+  try { gl = canvas.getContext('webgl2', opts); } catch (e) { gl = null; glFail = String(e && e.message || e); }
+  if (gl) break;
+}
+if (!gl && !glFail) {
+  glFail = !window.WebGL2RenderingContext ? 'This browser has no WebGL 2 support.' : 'WebGL 2 is turned off or blocked for this device’s graphics driver.';
+  try { const c1 = document.createElement('canvas'); if (c1.getContext('webgl')) glFail += ' (WebGL 1 works, so hardware acceleration is on.)'; else glFail += ' Hardware acceleration may be switched off.'; } catch (e) { /* ignore */ }
+}
 
-const GLX = { hdr: false, maxSamples: 0, aniso: null, maxAniso: 1 };
+const GLX = { hdr: false, maxSamples: 0, aniso: null, maxAniso: 1, renderer: '', vendor: '', safe: false };
+function gpuName() {
+  if (!gl) return 'unknown';
+  try {
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    return String(ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)) || 'unknown';
+  } catch (e) { return 'unknown'; }
+}
 const ATTR = { a_pos: 0, a_nrm: 1, a_uv: 2, a_col: 3, i_a: 4, i_b: 5, i_c: 6, i_d: 7 };
 const GLSL_HEAD = '#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\nprecision highp samplerCube;\n';
 
 function glInit() {
   if (!gl) return false;
+  GLX.renderer = gpuName();
   const e1 = gl.getExtension('EXT_color_buffer_float');
   const e2 = e1 ? null : gl.getExtension('EXT_color_buffer_half_float');
   gl.getExtension('OES_texture_float_linear');
   GLX.aniso = gl.getExtension('EXT_texture_filter_anisotropic');
   if (GLX.aniso) GLX.maxAniso = gl.getParameter(GLX.aniso.MAX_TEXTURE_MAX_ANISOTROPY_EXT) || 1;
   GLX.maxSamples = gl.getParameter(gl.MAX_SAMPLES) || 0;
-  GLX.hdr = !!(e1 || e2);
+  GLX.hdr = !!(e1 || e2) && !GLX.safe;
   if (GLX.hdr) { // verify half-float render targets actually work
     const t = makeTarget(4, 4, { hdr: true });
     GLX.hdr = t.ok; freeTarget(t);
@@ -37,7 +55,41 @@ function compileShader(type, src, name) {
   return s;
 }
 
+// Rewrite fbm(x, N) / ridged(x, N) calls with literal octave counts into fixed-length versions
+// (fbmN / ridgedN). Mobile GPU compilers unroll loops; a fixed bound keeps each program small.
+function specializeOctaves(src) {
+  if (src.indexOf('//@OCTAVES') < 0) return src;
+  const used = { fbm: new Set(), ridged: new Set() };
+  const spec = (str) => {
+    let out = '', i = 0;
+    const re = /\b(fbm|ridged)\s*\(/g;
+    let m;
+    while ((m = re.exec(str))) {
+      const fn = m[1], open = m.index + m[0].length;
+      let depth = 1, j = open, lastComma = -1;
+      for (; j < str.length; j++) {
+        const ch = str[j];
+        if (ch === '(') depth++;
+        else if (ch === ')') { if (--depth === 0) break; }
+        else if (ch === ',' && depth === 1) lastComma = j;
+      }
+      const oct = lastComma > 0 ? str.slice(lastComma + 1, j).trim() : '';
+      if (!/^\d+$/.test(oct)) { re.lastIndex = open; continue; } // definition or dynamic call: leave it
+      used[fn].add(+oct);
+      out += str.slice(i, m.index) + fn + oct + '(' + spec(str.slice(open, lastComma)) + ')';
+      i = j + 1; re.lastIndex = j + 1;
+    }
+    return out + str.slice(i);
+  };
+  let body = spec(src.replace(/\/\/@GENERIC_BEGIN[\s\S]*?\/\/@GENERIC_END/, ''));
+  let defs = '';
+  for (const n of [...used.fbm].sort()) defs += `float fbm${n}(vec3 p){ float s = 0.0, a = 0.5; for (int i = 0; i < ${n}; i++) { s += a * snoise(p); p = p * 2.02 + vec3(17.1, 5.3, 9.7); a *= 0.5; } return s; }\n`;
+  for (const n of [...used.ridged].sort()) defs += `float ridged${n}(vec3 p){ float s = 0.0, a = 0.5, w = 1.0; for (int i = 0; i < ${n}; i++) { float n = 1.0 - abs(snoise(p)); n *= n; n *= w; w = clamp(n * 1.6, 0.0, 1.0); s += a * n; p = p * 2.1 + vec3(3.7, 11.2, 7.9); a *= 0.5; } return s; }\n`;
+  return body.replace('//@OCTAVES', defs);
+}
+
 function makeProgram(name, vs, fs, defines = '') {
+  vs = specializeOctaves(vs); fs = specializeOctaves(fs);
   const vsrc = GLSL_HEAD + defines + vs, fsrc = GLSL_HEAD + defines + fs;
   const v = compileShader(gl.VERTEX_SHADER, vsrc, name + '.vs');
   const f = compileShader(gl.FRAGMENT_SHADER, fsrc, name + '.fs');

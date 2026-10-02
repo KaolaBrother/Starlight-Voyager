@@ -85,7 +85,7 @@ const Game = {
     for (const z of this.zones.values()) { z.active = false; z.spawnT = -999; z.pickT = -999; }
     this.started = true; this.bossActive = false; this.autopilot = false; this.wp = null; this.warping = false;
     const st = this.station(this.home) || World.systems[0].stations[0];
-    World.load(st.sys, true);
+    World.load(st.sys, false);
     for (const s of World.systems) if (s !== st.sys && s.loaded && s.pos.dist(st.pos) > 44000) World.unload(s);
     Player.alive = true; Player.invuln = 3;
     Player.placeAt(_v1.copy(st.gate).addScaled(st.gateDir, 90), st.gateDir);
@@ -147,12 +147,26 @@ const Game = {
     UI.syncSettings();
   },
   autoQuality() {
+    if (GLX.safe) return 'safe';
+    if (/Android/i.test(navigator.userAgent)) return this.androidTier(GLX.renderer || gpuName());
+    // iPhone and iPad (and other touch devices): unchanged
     if (Input.touchMode || (window.matchMedia && matchMedia('(pointer: coarse)').matches)) return 'medium';
     let ren = '';
     try { const ext = gl.getExtension('WEBGL_debug_renderer_info'); ren = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : ''; } catch (e) { ren = ''; }
     if (/swiftshader|llvmpipe|software|mali|adreno|powervr/i.test(ren)) return 'low';
     if (/intel|mesa/i.test(ren) && !/arc/i.test(ren)) return 'medium';
     return 'high';
+  },
+
+  // Android GPUs vary enormously. Flagship-class GPUs get the same Medium settings as iPhone;
+  // everything else starts on Low (still with glow effects). Frame-rate monitoring adjusts from there.
+  androidTier(ren) {
+    const r = String(ren).toLowerCase();
+    let m;
+    if ((m = r.match(/adreno[^0-9]*(\d{3})/))) return +m[1] >= 640 ? 'medium' : 'low';
+    if (/immortalis|xclipse/.test(r)) return 'medium';
+    if ((m = r.match(/mali-g(\d+)/))) { const n = +m[1]; return (n >= 76 && n <= 79) || n >= 710 ? 'medium' : 'low'; }
+    return 'low';
   },
 
   // ─── stations ───
@@ -443,7 +457,7 @@ const Game = {
       R.post.flash = smooth(0.8, 1.35, W.t) * 0.95; R.post.ab = 0.025 * Math.min(1, W.t);
       if (W.t > 1.4) {
         const s = W.sys, st = s.stations[0];
-        World.load(s, true);
+        World.load(s, false);
         const out = _v2.subVectors(st.pos, s.bh ? s.pos : s.starPos).normalize();
         const arr = st.pos.clone().addScaled(out, 1700).add(new V3(0, 220, 0));
         _v4.subVectors(st.pos, arr).normalize();
@@ -480,7 +494,7 @@ const Game = {
     if (Player.alive) return;
     const st = this.station(this.home) || World.systems[0].stations[0];
     const P = Player;
-    World.load(st.sys, true);
+    World.load(st.sys, false);
     P.alive = true; P.hp = P.maxHp; P.shield = P.maxShield; P.energy = P.maxEnergy; P.missiles = Math.max(P.missiles, Math.round(P.maxMissiles / 2));
     P.invuln = 4;
     P.placeAt(_v1.copy(st.gate).addScaled(st.gateDir, 90), st.gateDir);
@@ -642,35 +656,63 @@ const Game = {
 };
 
 // ───────────────────────────── boot ─────────────────────────────
-function fatal(msg) {
+const SAFE_KEY = 'starlight-voyager-safe';
+function browserName() {
+  const ua = navigator.userAgent;
+  const os = (ua.match(/Android [\d.]+/) || ua.match(/(iPhone|iPad)[^;)]*/) || ua.match(/Windows NT [\d.]+|Mac OS X [\d_]+|Linux/) || ['unknown OS'])[0];
+  const br = (ua.match(/SamsungBrowser\/[\d.]+|EdgA?\/[\d.]+|Firefox\/[\d.]+|OPR\/[\d.]+|Chrome\/[\d.]+|Version\/[\d.]+ (Mobile\/\w+ )?Safari/) || ['unknown browser'])[0];
+  return os.replace(/_/g, '.') + ' · ' + br;
+}
+function fatal(msg, err) {
   $('loading').hidden = true;
   if (msg) $('fatal-text').textContent = msg;
+  const detail = 'Graphics: ' + (GLX.renderer || gpuName()) + ' · ' + browserName() + (err ? ' · ' + (err.message || err) : '');
+  $('fatal-detail').textContent = detail;
+  let safe = false; try { safe = localStorage.getItem(SAFE_KEY) === '1'; } catch (e) { /* ignore */ }
+  $('fatal-safe').hidden = safe || !gl;
   $('fatal').hidden = false;
+  console.warn('Starlight Voyager stopped: ' + detail);
 }
 function boot(hotData) {
   if (hotData && hotData.save) Game._hotSave = hotData.save;
-  if (!glInit()) { fatal(); return; }
+  $('fatal-reload').addEventListener('click', () => location.reload());
+  $('fatal-safe').addEventListener('click', () => { try { localStorage.setItem(SAFE_KEY, '1'); } catch (e) { /* ignore */ } location.reload(); });
+  try { GLX.safe = localStorage.getItem(SAFE_KEY) === '1'; } catch (e) { GLX.safe = false; }
+  if (location.hash.includes('safe')) GLX.safe = true;
+  if (!glInit()) { fatal(glFail ? 'This device can’t start WebGL 2, which the game needs. ' + glFail + ' Updating Chrome, or turning on hardware acceleration, usually fixes this.' : null); return; }
   Game.loadSettings();
   const testMode = location.hash.includes('test');
   if (testMode) { for (const k in QUALITY) { QUALITY[k].planetTex = 512; QUALITY[k].sky = 256; QUALITY[k].msaa = 0; } }
+  const home = () => World.systems[0];
+  // GPU-heavy work is split into small steps (one sky face or one planet each) so no single
+  // submission runs long enough for a mobile GPU watchdog to reset the graphics driver.
   const steps = [
     ['Calibrating instruments', () => { UI.init(); Input.init(); Projs.init(); Dust.init(); DmgNums.init(); }],
-    ['Building the fleet', () => { const q = Game.settings.quality === 'auto' || !QUALITY[Game.settings.quality] ? Game.autoQuality() : Game.settings.quality; R.init(q); buildModels(); R.resize(true); }],
-    ['Painting the nebulae', () => { const home = new V3(...GALAXY[0].pos); R.bakeSky(R.q.sky, home.negate().normalize(), [3.1, 7.7, 1.3]); }],
-    ['Charting the galaxy', () => { World.build(); World.onLoad = (s) => Game.onSystemLoad(s); document.querySelector('.title-wrap .eyebrow').textContent = `${World.systems.length} star systems · ${World.allBodies().length} worlds`; }],
-    ['Forming planets', () => { World.load(World.systems[0], true); World.update(0.001, World.systems[0].stations[0].pos); }],
+    ['Building the fleet', () => { const q = GLX.safe ? 'safe' : (Game.settings.quality === 'auto' || !QUALITY[Game.settings.quality] ? Game.autoQuality() : Game.settings.quality); R.init(q); buildModels(); R.resize(true); }],
+    ['Painting the nebulae', () => { const h = new V3(...GALAXY[0].pos); R.bakeSkyStart(R.q.sky, h.negate().normalize(), [3.1, 7.7, 1.3]); }],
   ];
-  let i = 0;
+  for (let f = 0; f < 6; f++) steps.push(['Painting the nebulae', () => { R.bakeSkyFace(f); if (f === 5) R.bakeSkyEnd(); }]);
+  steps.push(['Charting the galaxy', () => {
+    World.build(); World.onLoad = (sys) => Game.onSystemLoad(sys);
+    document.querySelector('.title-wrap .eyebrow').textContent = `${World.systems.length} star systems · ${World.allBodies().length} worlds`;
+    World.load(home(), false);
+    const n = World.bakeQueue.length;
+    for (let k = 0; k < n; k++) steps.splice(i + 1 + k, 0, [`Forming planets ${k + 1} / ${n}`, () => { const b = World.bakeQueue.shift(); if (b) World.bake(b); }]);
+  }]);
+  steps.push(['Ready', () => { World.update(0.001, home().stations[0].pos); }]);
+  let i = 0, total = steps.length;
   const bar = $('ld-bar'), txt = $('ld-text');
   const next = () => {
     if (i >= steps.length) return done();
+    total = Math.max(total, steps.length);
     const [label, fn] = steps[i];
     txt.textContent = label;
-    bar.style.width = Math.round(i / steps.length * 100) + '%';
+    bar.style.width = Math.round(i / total * 100) + '%';
     setTimeout(() => {
-      try { fn(); } catch (e) { console.error(e); fatal('The game failed to start: ' + (e && e.message ? e.message : e)); return; }
+      if (gl.isContextLost()) { fatal('The graphics driver stopped while the game was loading. Try safe mode, which uses lighter graphics.'); return; }
+      try { fn(); } catch (e) { console.error(e); fatal('The game failed to start. Try safe mode, which uses lighter graphics.', e); return; }
       i++; next();
-    }, 30);
+    }, 16);
   };
   const done = () => {
     bar.style.width = '100%';
@@ -682,11 +724,14 @@ function boot(hotData) {
     $('loading').hidden = true;
     UI.show('scr-title'); Game.refreshTitle();
     $('rotate-hint').hidden = !(Input.touchMode && innerHeight > innerWidth);
+    $('btn-safe-off').hidden = !GLX.safe;
+    if (R.fallbacks.length) console.warn('Simplified shaders in use on this device: ' + R.fallbacks.join(', '));
     Game._last = performance.now();
     requestAnimationFrame((t) => Game.frame(t));
     window.__ready = true;
     if (testMode) {
       Game.perf.cool = 1e9;
+      window.__SH = SH; window.__spec = specializeOctaves;
       window.__G = { Game, Player, World, Enemies, Items, Projs, R, UI, Input, Parts, Cam, V3, Quat, Sound, BOSSES, WEAPONS, ETYPES, Boss,
         sim(sec, dt = 1 / 30) { for (let t = 0; t < sec; t += dt) { if (Game.state === 'play' || Game.state === 'dead') Game.update(dt); Game.updatePost(dt); } if (Game.state === 'play' || Game.state === 'dead') UI.update(dt); return Game.state; } };
     }
@@ -703,7 +748,24 @@ function boot(hotData) {
   $('btn-snd-title').addEventListener('click', () => { Game.settings.sound = !Game.settings.sound; Sound.init(); Sound.setOn(Game.settings.sound); Game.saveSettings(); UI.syncSettings(); });
   document.addEventListener('visibilitychange', () => { if (document.hidden) { if (Game.state === 'play') Game.pause(); Game.save(); } });
   window.addEventListener('pagehide', () => Game.save());
-  canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); fatal('The graphics context was lost. Reload the page to continue; your progress was saved.'); Game.save(); });
+  canvas.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault(); Game.save();
+    if (Game.state === 'play') Game.pause();
+    fatal(window.__ready ? 'The graphics driver restarted. Reload to carry on; your progress is saved.' : 'The graphics driver stopped while the game was loading. Try safe mode, which uses lighter graphics.');
+    $('fatal').querySelector('h2').textContent = window.__ready ? 'Graphics paused' : 'Can’t start the engine';
+  });
+  canvas.addEventListener('webglcontextrestored', () => { Game.save(); location.reload(); });
+  window.addEventListener('error', (e) => { if (!window.__ready && $('fatal').hidden) fatal('The game failed to start. Try safe mode, which uses lighter graphics.', e.error || e.message); });
+  $('btn-safe-off').addEventListener('click', () => { try { localStorage.removeItem(SAFE_KEY); } catch (e) { /* ignore */ } location.reload(); });
+  const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const fsOk = !!(document.fullscreenEnabled && document.documentElement.requestFullscreen) && !isIOS;
+  const goFull = (btn) => {
+    if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; }
+    document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => { btn.textContent = 'Full screen isn’t available here'; btn.disabled = true; });
+  };
+  for (const id of ['btn-fs-title', 'opt-fs']) { const b = $(id); b.hidden = !fsOk; b.addEventListener('click', () => goFull(b)); }
+  if (!fsOk) $('opt-fs').closest('.setrow').hidden = true;
+  document.addEventListener('fullscreenchange', () => { const on = !!document.fullscreenElement; $('btn-fs-title').textContent = on ? 'Exit full screen' : 'Full screen'; $('opt-fs').textContent = on ? 'On' : 'Off'; $('opt-fs').classList.toggle('on', on); setTimeout(() => R.resize(true), 100); });
   if (window.claude && window.claude.hot && window.claude.hot.snapshot) window.claude.hot.snapshot(() => ({ save: Game.started ? Game.saveData() : Game.readSave() }));
   next();
 }

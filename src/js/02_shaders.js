@@ -45,6 +45,7 @@ float snoise(vec3 v){
   m = m * m;
   return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
 }
+//@GENERIC_BEGIN
 float fbm(vec3 p, int oct){
   float s = 0.0, a = 0.5;
   for (int i = 0; i < 10; i++) { if (i >= oct) break; s += a * snoise(p); p = p * 2.02 + vec3(17.1, 5.3, 9.7); a *= 0.5; }
@@ -55,6 +56,8 @@ float ridged(vec3 p, int oct){
   for (int i = 0; i < 10; i++) { if (i >= oct) break; float n = 1.0 - abs(snoise(p)); n *= n; n *= w; w = clamp(n * 1.6, 0.0, 1.0); s += a * n; p = p * 2.1 + vec3(3.7, 11.2, 7.9); a *= 0.5; }
   return s;
 }
+//@GENERIC_END
+//@OCTAVES
 vec3 hash33(vec3 p3){ p3 = fract(p3 * vec3(0.1031, 0.1030, 0.0973)); p3 += dot(p3, p3.yxz + 33.33); return fract((p3.xxy + p3.yxx) * p3.zyx); }
 float hash13(vec3 p3){ p3 = fract(p3 * 0.1031); p3 += dot(p3, p3.zyx + 31.32); return fract((p3.x + p3.y) * p3.z); }
 float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
@@ -435,10 +438,12 @@ void main(){
   vec3 alb = pow(t.rgb, vec3(2.2));
   vec3 Ng = normalize(v_nrm);
   vec3 N = Ng;
+#ifndef LITE
   if (u_detail > 0.01) {
     float dn = snoise(v_opos * 60.0) * 0.5 + snoise(v_opos * 150.0) * 0.3;
     alb *= 1.0 + dn * 0.14 * u_detail;
   }
+#endif
   if (u_amode == 2 && u_bump > 0.001) {
     float hu = texture(u_map, v_uv + vec2(u_texel.x, 0.0)).a;
     float hv = texture(u_map, v_uv + vec2(0.0, u_texel.y)).a;
@@ -534,8 +539,12 @@ in vec3 v_opos; in vec3 v_nrm; in vec3 v_wpos; out vec4 o;
 void main(){
   if (u_dark > 0.5) { o = vec4(0.0, 0.0, 0.0, 1.0); return; }
   vec3 p = normalize(v_opos);
+#ifdef LITE
+  float n = 0.6, g = 0.5;
+#else
   float n = fbm(p * 5.0 + vec3(0.0, u_time * 0.03, u_time * 0.02), 4) * 0.5 + 0.5;
   float g = snoise(p * 22.0 + vec3(u_time * 0.08)) * 0.5 + 0.5;
+#endif
   float v = n * 0.72 + g * 0.28;
   vec3 V = normalize(-v_wpos);
   float mu = max(dot(normalize(v_nrm), V), 0.0);
@@ -561,8 +570,12 @@ void main(){
   float spd = 0.9 / pow(rad, 1.5);
   float a2 = ang - u_time * spd;
   vec3 q = vec3(cos(a2) * rad, sin(a2) * rad, r * 2.0);
+#ifdef LITE
+  float n = 0.5 + 0.5 * sin(a2 * 3.0 + rad * 4.0), fil = 0.6;
+#else
   float n = fbm(q * 1.7 + vec3(0.0, 0.0, u_time * 0.04), 5) * 0.5 + 0.5;
   float fil = fbm(vec3(cos(a2) * rad * 3.0, sin(a2) * rad * 3.0, r * 14.0), 3) * 0.5 + 0.5;
+#endif
   float dens = smoothstep(0.0, 0.06, r) * pow(1.0 - r, 1.3) * (0.25 + 0.95 * n) * (0.7 + 0.5 * fil);
   vec3 hot = vec3(1.0, 0.92, 0.85) * 4.2, mid = vec3(1.0, 0.5, 0.14) * 2.2, cool = vec3(0.55, 0.1, 0.04);
   vec3 col = mix(hot, mid, smoothstep(0.0, 0.3, r));
@@ -743,4 +756,48 @@ void main(){
   col = pow(clamp(col, 0.0, 1.0), vec3(1.0 / 2.2));
   col += (hash12(gl_FragCoord.xy + fract(u_time * 7.0) * 113.0) - 0.5) / 200.0;
   o = vec4(col, 1.0);
+}`;
+
+
+// ─── per-type planet bake programs ───
+// One small program per planet type instead of a single program containing all 17 types:
+// Android GPU drivers (Adreno, Mali) can fail or stall compiling the combined version.
+function glslExtract(src, sig) {
+  const i = src.indexOf(sig);
+  if (i < 0) throw new Error('GLSL function not found: ' + sig);
+  let j = src.indexOf('{', i), depth = 0;
+  for (; j < src.length; j++) { if (src[j] === '{') depth++; else if (src[j] === '}' && --depth === 0) break; }
+  return src.slice(i, j + 1);
+}
+SH.bakeTypeFn = ['tTerran', 'tDesert', 'tIce', 'tLava', 'tGas', 'tToxic', 'tCrystal', 'tTerran', 'tTerran', 'tBarren', 'tIron', 'tBio', 'tMachine', 'tStorm', 'tIceGiant', 'tSulfur', 'tShattered', 'tTerran', 'tRogue'];
+SH.bakeFallbackFn = `vec4 tFallback(vec3 d, vec3 p){
+  float h = fbm(p * 1.3, 4); float b = fbm(p * 3.0 + 7.0, 3);
+  vec3 col = mix(u_c[0], u_c[1], smoothstep(-0.4, 0.4, h));
+  col = mix(col, u_c[2], smoothstep(0.1, 0.6, b) * 0.5);
+  return vec4(col, 0.35);
+}`;
+SH.bakeSource = (fn) => {
+  const src = SH.planetBakeFS;
+  const head = src.slice(0, src.indexOf('float craters('));
+  const dir = 'void main(){\n  float phi = v_uv.x * 6.28318530718;\n  float th = (1.0 - v_uv.y) * 3.14159265359;\n  vec3 d = vec3(-cos(phi) * sin(th), cos(th), sin(phi) * sin(th));\n';
+  if (fn === 'clouds') return head + glslExtract(src, 'float cloudsF(') + '\n' + dir + '  float c = cloudsF(d); o = vec4(c, c, c, 1.0);\n}';
+  const body = fn === 'tFallback' ? SH.bakeFallbackFn
+    : (['tBarren', 'tIron', 'tShattered'].includes(fn) ? glslExtract(src, 'float craters(') + '\n' : '') + glslExtract(src, 'vec4 ' + fn + '(');
+  return head + body + '\n' + dir + '  vec3 p = d * u_p2.z + u_seed;\n  vec4 r = ' + fn + '(d, p);\n  o = vec4(pow(clamp(r.rgb, 0.0, 1.0), vec3(1.0 / 2.2)), clamp(r.a, 0.0, 1.0));\n}';
+};
+// simpler sky used only if the full nebula shader cannot compile on a device
+SH.skyBakeFallbackFS = SH.noise + `
+uniform int u_face; uniform vec3 u_core; uniform vec3 u_seed;
+in vec2 v_uv; out vec4 o;
+` + glslExtract(SH.skyBakeFS, 'vec3 faceDir(') + '\n' + glslExtract(SH.skyBakeFS, 'float starLayer(') + `
+void main(){
+  vec3 d = normalize(faceDir(u_face, v_uv));
+  float band = exp(-d.y * d.y * 9.0);
+  float core = pow(max(dot(d, u_core), 0.0), 3.0);
+  float n = fbm(d * 2.0 + u_seed, 4) * 0.5 + 0.5;
+  vec3 col = mix(vec3(0.40, 0.46, 0.78), vec3(1.0, 0.76, 0.48), core) * band * (0.03 + 0.18 * core) * n;
+  col += mix(vec3(0.6, 0.08, 0.42), vec3(0.06, 0.26, 0.74), n) * smoothstep(0.55, 0.85, n) * 0.08;
+  col += vec3(0.85, 0.9, 1.0) * (starLayer(d, 190.0, 0.2 + band * 0.45) * 0.45 + starLayer(d, 420.0, 0.12 + band * 0.55) * 0.3) * (0.45 + band);
+  col += vec3(0.003, 0.0035, 0.008);
+  o = vec4(pow(clamp(col, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0);
 }`;
