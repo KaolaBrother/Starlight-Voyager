@@ -30,6 +30,9 @@
 }
 [hidden] { display: none !important; }
 *, *::before, *::after { box-sizing: border-box; }
+/* No text selection, long-press callouts or tap flashes anywhere in the game (Android Chrome selects on long press) */
+html, body, * { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+input, textarea { -webkit-user-select: text; user-select: text; }
 html, body { height: 100%; }
 html, body { overscroll-behavior: none; }
 html { overflow: hidden; touch-action: none; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }

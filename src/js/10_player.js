@@ -81,6 +81,25 @@ const Input = {
     const keepTap = (t) => t && t.closest && t.closest('a, input, select, label, textarea, button:not(.tb)');
     document.addEventListener('touchend', (e) => { if (!keepTap(e.target)) e.preventDefault(); }, { passive: false });
     document.addEventListener('touchstart', (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
+    // No text selection, long-press menus or drags. The error screen's detail line stays copyable.
+    const canSelect = (t) => t && t.closest && t.closest('input, textarea, .fatal .detail');
+    document.addEventListener('selectstart', (e) => { if (!canSelect(e.target)) e.preventDefault(); });
+    document.addEventListener('contextmenu', (e) => { if (!canSelect(e.target)) e.preventDefault(); });
+    document.addEventListener('dragstart', (e) => e.preventDefault());
+    document.addEventListener('selectionchange', () => {
+      const sel = window.getSelection && window.getSelection();
+      if (!sel || sel.isCollapsed || !sel.anchorNode) return;
+      const n = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
+      if (!canSelect(n)) sel.removeAllRanges();
+    });
+    // Android: a held finger on the game view or touch controls must not start Chrome's
+    // long-press text selection. Controls use pointer events, so cancelling the touch is safe.
+    if (/Android/i.test(navigator.userAgent)) {
+      document.addEventListener('touchstart', (e) => {
+        const t = e.target;
+        if (t && t.closest && t.closest('#game, #touch, #hud, #mapc') && !keepTap(t)) e.preventDefault();
+      }, { passive: false });
+    }
     document.addEventListener('touchmove', (e) => { if (e.touches.length > 1 || (typeof e.scale === 'number' && e.scale !== 1)) e.preventDefault(); }, { passive: false });
     for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
     document.addEventListener('dblclick', (e) => e.preventDefault(), { passive: false });
